@@ -71,20 +71,56 @@ class ChatbotEngine:
         if not self.is_ready():
             return "Chatbot is not ready. Please provide an API Key in the sidebar."
 
-        # Set up LLM based on provider with low temperature for factual precision
+        query_lower = user_query.lower().strip()
+
+        # --- STEP 1: PYTHON-LEVEL DOMAIN RELEVANCE PRE-FILTER ---
+        unifier_keywords = [
+            "project", "projects", "unifier", "vendor", "vendors", "contract", "contracts",
+            "record", "records", "bp", "bps", "business process", "user", "users", "admin",
+            "file", "files", "attachment", "attachments", "shell", "shells", "rfi", "submittal",
+            "change order", "status", "active", "cost", "budget", "count", "how many", "list",
+            "show", "fetch", "query", "catalog", "schema", "uuu", "oracle"
+        ]
+        
+        is_unifier_query = any(kw in query_lower for kw in unifier_keywords)
+
+        # Non-Unifier general trivia check (e.g., PM of India, weather, general jokes)
+        general_trivia_indicators = [
+            "pm of", "prime minister", "president", "capital of", "weather", "who is", "tell me a joke",
+            "actor", "movie", "song", "sports", "cricket", "football", "recipe", "country"
+        ]
+        is_general_trivia = any(ind in query_lower for ind in general_trivia_indicators) and not is_unifier_query
+
+        if is_general_trivia:
+            return "I am a dedicated Oracle Primavera Unifier Database Assistant. I can only answer questions related to your fetched Unifier database records, projects, and business processes."
+
+        # --- STEP 2: SIMILARITY SEARCH CHECK ---
+        docs = []
+        try:
+            docs = self.vector_store.similarity_search(user_query, k=5)
+        except Exception:
+            docs = []
+
+        if not docs or len(docs) == 0:
+            if is_unifier_query:
+                return "No matching Unifier database records were found in loaded memory. Please use the dashboard tabs (e.g., Active Projects, Company BPs, User Admin) to fetch your data first."
+            else:
+                return "I am a dedicated Oracle Primavera Unifier Database Assistant. I can only answer questions related to your fetched Unifier database records, projects, and business processes."
+
+        # --- STEP 3: STRICT CONTEXT-ONLY LLM EXECUTION ---
         if provider == "groq":
             if not self.groq_api_key:
                 return "Groq API key is missing. Please provide it in the sidebar."
             try:
                 llm = ChatGroq(
                     model_name="llama-3.3-70b-versatile",
-                    temperature=0.1,
+                    temperature=0.0,
                     groq_api_key=self.groq_api_key
                 )
             except Exception:
                 llm = ChatGroq(
                     model_name="llama-3.1-8b-instant",
-                    temperature=0.1,
+                    temperature=0.0,
                     groq_api_key=self.groq_api_key
                 )
         else:
@@ -92,27 +128,23 @@ class ChatbotEngine:
                 return "OpenAI API key is missing. Please provide it in the sidebar."
             llm = ChatOpenAI(
                 model="gpt-3.5-turbo",
-                temperature=0.1,
+                temperature=0.0,
                 openai_api_key=self.openai_api_key
             )
 
-        # Build strict system prompt for database-scoped RAG QA
+        # System prompt strictly forbidding external knowledge
         system_prompt = (
-            "You are a strict RAG-based AI Assistant for the Oracle Primavera Unifier Database.\n"
-            "STRICT RULES YOU MUST FOLLOW WITHOUT EXCEPTION:\n"
-            "1. ONLY answer questions that are directly related to Oracle Primavera Unifier database records, active projects, business processes, project management, or system users based on the retrieved context below.\n"
-            "2. If the user asks general trivia, world news, personal questions, or anything unrelated to Primavera Unifier / database records (e.g. 'who is pm of india', weather, general jokes), REJECT the question politely with:\n"
-            "   'I am a dedicated Oracle Primavera Unifier Database Assistant. I can only answer questions related to your fetched Unifier database records, projects, and business processes.'\n"
-            "3. If the retrieved context is empty or does not contain enough information to answer a Unifier database question, inform the user clearly:\n"
-            "   'No matching Unifier database records were found in loaded memory. Please use the dashboard tabs (e.g., Active Projects, Company BPs, User Admin) to fetch your data first.'\n"
-            "4. Never hallucinate or invent fake database records.\n"
-            "5. Always format your responses cleanly using Markdown.\n\n"
+            "You are a strict Oracle Primavera Unifier Database RAG assistant.\n"
+            "STRICT RULES:\n"
+            "1. Answer the user's question STRICTLY AND ONLY using the retrieved Unifier context provided below.\n"
+            "2. DO NOT use any outside knowledge, pre-trained world facts, or external trivia.\n"
+            "3. If the retrieved context does not contain the explicit answer to the user's question, reply EXACTLY with:\n"
+            "   'The loaded Unifier database context does not contain enough information to answer this question.'\n"
+            "4. Format your response cleanly using Markdown.\n\n"
             "Retrieved Unifier Database Context:\n{context}"
         )
 
-        # Construct message list with conversation history
         messages = [("system", system_prompt)]
-
         if chat_history:
             past_msgs = chat_history[:-1] if chat_history and chat_history[-1].get("content") == user_query else chat_history
             for msg in past_msgs[-6:]:
@@ -122,13 +154,9 @@ class ChatbotEngine:
         messages.append(("human", "{input}"))
         prompt = ChatPromptTemplate.from_messages(messages)
 
-        # Create retrieval chain
         try:
-            retriever = self.vector_store.as_retriever(search_kwargs={"k": 5})
             question_answer_chain = create_stuff_documents_chain(llm, prompt)
-            chain = create_retrieval_chain(retriever, question_answer_chain)
-
-            response = chain.invoke({"input": user_query})
-            return response.get("answer", "I couldn't generate a response based on the retrieved database context.")
+            response = question_answer_chain.invoke({"input": user_query, "context": docs})
+            return response if isinstance(response, str) else response.get("answer", str(response))
         except Exception as e:
             return f"Error querying database AI engine: {str(e)}"
