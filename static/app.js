@@ -422,7 +422,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const chatTitleDisplay = document.getElementById("chatTitleDisplay");
 
     let currentConversationId = null;
-    let chatHistory = []; // local cache for current session
+    chatHistory = []; // local cache for current session
 
     async function loadConversations() {
         try {
