@@ -245,31 +245,15 @@ def custom_request(req: CustomRequestReq):
 def chat(req: ChatReq):
     engine = get_engine(openai_key=req.openai_api_key, groq_key=req.groq_api_key)
 
-    # Dynamic Live API Fallback if token is available
+    client = None
     if req.bearer_token:
-        prompt_lower = req.prompt.lower()
         client = UnifierClient(bearer_token=req.bearer_token, base_url=req.base_url)
-        
-        # If user asks about specific common BPs, attempt live fetching into DB
-        bp_triggers = ["vendor", "contract", "invoice", "purchase order", "rfi", "submittal", "change order"]
-        for bp in bp_triggers:
-            if bp in prompt_lower:
-                c_ok, c_res, _, _ = client.get_company_bp_records(bpname=bp.title())
-                if c_ok:
-                    engine.ingest_json_data(c_res, source_name=f"Company BP: {bp.title()}")
-                p_ok, p_res, _, _ = client.get_project_bp_records(project_number="001", bpname=bp.title())
-                if p_ok:
-                    engine.ingest_json_data(p_res, source_name=f"Project 001 BP: {bp.title()}")
-
-        if "user" in prompt_lower or "admin" in prompt_lower:
-            u_ok, u_res, _, _ = client.get_users()
-            if u_ok:
-                engine.ingest_json_data(u_res, source_name="User Admin List")
 
     answer = engine.get_chat_response(
         user_query=req.prompt,
         chat_history=req.chat_history or [],
-        provider=req.provider or "groq"
+        provider=req.provider or "groq",
+        client=client
     )
     return {"answer": answer}
 
