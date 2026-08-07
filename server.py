@@ -93,6 +93,8 @@ class CustomRequestReq(BaseModel):
     custom_headers: Optional[Dict[str, str]] = None
 
 class ChatReq(BaseModel):
+    bearer_token: Optional[str] = ""
+    base_url: Optional[str] = ""
     openai_api_key: Optional[str] = ""
     groq_api_key: Optional[str] = ""
     provider: Optional[str] = "groq"
@@ -111,17 +113,33 @@ def test_connection(req: TestConnectionReq):
     client = UnifierClient(bearer_token=req.bearer_token, base_url=req.base_url)
     success, msg, code = client.test_connection()
     if success:
-        # Pre-populate Vector DB with Active Projects & Company BP catalog automatically
+        # Pre-populate Vector DB across ALL master endpoints automatically
         try:
+            engine = get_engine()
+            # 1. Active Projects
             p_success, p_data, _, _ = client.get_active_projects()
             if p_success:
-                engine = get_engine()
                 engine.ingest_json_data(p_data, source_name="Active Projects List")
-            
+                # Parse project numbers to fetch project BP catalogs
+                if isinstance(p_data, dict) and "data" in p_data:
+                    proj_list = p_data.get("data", [])
+                    for proj in proj_list[:5]: # Pre-fetch catalogs for first 5 projects
+                        proj_no = proj.get("project_number") or proj.get("projectnumber")
+                        if proj_no:
+                            pb_success, pb_data, _, _ = client.get_project_bp_list(proj_no)
+                            if pb_success:
+                                engine.ingest_json_data(pb_data, source_name=f"Project {proj_no} BP Catalog")
+
+            # 2. Company BP Catalog
             c_success, c_data, _, _ = client.get_company_bp_list()
             if c_success:
-                engine = get_engine()
                 engine.ingest_json_data(c_data, source_name="Company BP Catalog")
+
+            # 3. User Directory
+            u_success, u_data, _, _ = client.get_users()
+            if u_success:
+                engine.ingest_json_data(u_data, source_name="User Admin List")
+
         except Exception:
             pass
     return {"success": success, "message": msg, "status_code": code}
@@ -226,6 +244,28 @@ def custom_request(req: CustomRequestReq):
 @app.post("/api/chat")
 def chat(req: ChatReq):
     engine = get_engine(openai_key=req.openai_api_key, groq_key=req.groq_api_key)
+
+    # Dynamic Live API Fallback if token is available
+    if req.bearer_token:
+        prompt_lower = req.prompt.lower()
+        client = UnifierClient(bearer_token=req.bearer_token, base_url=req.base_url)
+        
+        # If user asks about specific common BPs, attempt live fetching into DB
+        bp_triggers = ["vendor", "contract", "invoice", "purchase order", "rfi", "submittal", "change order"]
+        for bp in bp_triggers:
+            if bp in prompt_lower:
+                c_ok, c_res, _, _ = client.get_company_bp_records(bpname=bp.title())
+                if c_ok:
+                    engine.ingest_json_data(c_res, source_name=f"Company BP: {bp.title()}")
+                p_ok, p_res, _, _ = client.get_project_bp_records(project_number="001", bpname=bp.title())
+                if p_ok:
+                    engine.ingest_json_data(p_res, source_name=f"Project 001 BP: {bp.title()}")
+
+        if "user" in prompt_lower or "admin" in prompt_lower:
+            u_ok, u_res, _, _ = client.get_users()
+            if u_ok:
+                engine.ingest_json_data(u_res, source_name="User Admin List")
+
     answer = engine.get_chat_response(
         user_query=req.prompt,
         chat_history=req.chat_history or [],

@@ -446,6 +446,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
+                    bearer_token: bearerToken.value.trim(),
+                    base_url: getBaseUrl(),
                     openai_api_key: openaiApiKey.value.trim(),
                     groq_api_key: groqApiKey.value.trim(),
                     provider: llmProvider.value,
