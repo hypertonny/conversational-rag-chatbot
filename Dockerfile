@@ -28,9 +28,9 @@ COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --system torch --index-url https://download.pytorch.org/whl/cpu
 
-# 2. Install remaining application dependencies
+# 2. Install remaining application dependencies from PyPI
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+    uv pip install --system -r requirements.txt
 
 # Pre-download SentenceTransformer embeddings model during build into cached layer
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
