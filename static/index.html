@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Oracle Primavera Unifier Portal & AI Chatbot</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="/static/style.css">
+    <!-- Markdown Parser (Marked.js) -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+
+    <!-- APP WRAPPER -->
+    <div class="app-layout">
+
+        <!-- SIDEBAR -->
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="brand-icon">🏛️</div>
+                <div class="brand-text">
+                    <h2>Primavera Unifier</h2>
+                    <span>REST API v2 Portal</span>
+                </div>
+            </div>
+
+            <div class="sidebar-section">
+                <h3><i class="fa-solid fa-key"></i> Authentication & Config</h3>
+                
+                <div class="form-group">
+                    <label>Environment Endpoint</label>
+                    <select id="envSelector" class="form-control">
+                        <option value="test">Consulting Test Environment</option>
+                        <option value="prod">Production Environment</option>
+                        <option value="custom">Custom Base URL</option>
+                    </select>
+                </div>
+
+                <div class="form-group" id="customUrlGroup" style="display: none;">
+                    <label>Custom Base URL</label>
+                    <input type="text" id="customBaseUrl" class="form-control" placeholder="https://domain.com/ws/rest/service/v1">
+                </div>
+
+                <div class="form-group">
+                    <label>Bearer Token</label>
+                    <div class="input-with-icon">
+                        <input type="password" id="bearerToken" class="form-control" placeholder="Paste your Bearer Token...">
+                        <button type="button" id="toggleTokenVisibility" class="btn-icon"><i class="fa-solid fa-eye"></i></button>
+                    </div>
+                </div>
+
+                <button id="btnTestConn" class="btn btn-primary btn-block">
+                    <i class="fa-solid fa-plug"></i> Test API Connection
+                </button>
+                <div id="connStatus" class="status-indicator"></div>
+            </div>
+
+            <div class="sidebar-section">
+                <h3><i class="fa-solid fa-robot"></i> AI Chatbot Config</h3>
+                <div class="form-group">
+                    <label>LLM Provider</label>
+                    <select id="llmProvider" class="form-control">
+                        <option value="groq">Groq (Ultra-Fast LPU)</option>
+                        <option value="openai">OpenAI (GPT-3.5/4o)</option>
+                    </select>
+                </div>
+
+                <div class="form-group" id="groqKeyGroup">
+                    <label>Groq API Key</label>
+                    <input type="password" id="groqApiKey" class="form-control" placeholder="gsk_...">
+                </div>
+
+                <div class="form-group" id="openaiKeyGroup" style="display: none;">
+                    <label>OpenAI API Key</label>
+                    <input type="password" id="openaiApiKey" class="form-control" placeholder="sk-...">
+                </div>
+            </div>
+
+            <div class="sidebar-footer">
+                <span>Oracle Primavera Unifier Portal v2.0</span>
+            </div>
+        </aside>
+
+        <!-- MAIN CONTENT AREA -->
+        <main class="main-content">
+
+            <!-- HERO HEADER -->
+            <header class="hero-header">
+                <div class="hero-info">
+                    <h1>🏛️ Oracle Primavera Unifier REST API Portal</h1>
+                    <p>Enterprise Dashboard for Active Projects, Company & Project Business Processes, Attachments, User Admin, and Conversational RAG AI.</p>
+                </div>
+            </header>
+
+            <!-- TABS NAVIGATION -->
+            <div class="tabs-header">
+                <button class="tab-btn active" data-tab="tabOverview"><i class="fa-solid fa-chart-pie"></i> Overview</button>
+                <button class="tab-btn" data-tab="tabProjects"><i class="fa-solid fa-folder-tree"></i> Active Projects</button>
+                <button class="tab-btn" data-tab="tabCompanyBP"><i class="fa-solid fa-building"></i> Company BPs</button>
+                <button class="tab-btn" data-tab="tabProjectBP"><i class="fa-solid fa-helmet-safety"></i> Project BPs</button>
+                <button class="tab-btn" data-tab="tabAttachments"><i class="fa-solid fa-paperclip"></i> Attachments</button>
+                <button class="tab-btn" data-tab="tabUsers"><i class="fa-solid fa-users"></i> User Admin</button>
+                <button class="tab-btn" data-tab="tabExplorer"><i class="fa-solid fa-bolt"></i> API Explorer</button>
+            </div>
+
+            <!-- TAB 1: OVERVIEW -->
+            <div id="tabOverview" class="tab-content active">
+                <div class="grid-3">
+                    <div class="card">
+                        <div class="card-icon"><i class="fa-solid fa-lock"></i></div>
+                        <h3>1. Authenticate</h3>
+                        <p>Enter your Unifier Bearer Token in the left sidebar and test connection.</p>
+                    </div>
+                    <div class="card">
+                        <div class="card-icon"><i class="fa-solid fa-database"></i></div>
+                        <h3>2. Query Endpoints</h3>
+                        <p>Fetch active projects, catalog lists, and business process records cleanly.</p>
+                    </div>
+                    <div class="card">
+                        <div class="card-icon"><i class="fa-solid fa-file-export"></i></div>
+                        <h3>3. Export & Chat</h3>
+                        <p>Export data to CSV/JSON and ask questions using the floating AI Chatbot.</p>
+                    </div>
+                </div>
+
+                <div class="card margin-top">
+                    <h3>📋 Supported Endpoints Cheat Sheet</h3>
+                    <div class="table-responsive">
+                        <table class="custom-table">
+                            <thead>
+                                <tr>
+                                    <th>Action</th>
+                                    <th>Method</th>
+                                    <th>Endpoint Path</th>
+                                    <th>Description</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><strong>Active Projects</strong></td>
+                                    <td><span class="badge badge-get">GET</span></td>
+                                    <td><code>/admin/projectshell?Status=Active</code></td>
+                                    <td>List active project shells</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Company BP Catalog</strong></td>
+                                    <td><span class="badge badge-get">GET</span></td>
+                                    <td><code>/admin/bps</code></td>
+                                    <td>Master list of company Business Processes</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Project BP Catalog</strong></td>
+                                    <td><span class="badge badge-get">GET</span></td>
+                                    <td><code>/admin/bps/{project_number}</code></td>
+                                    <td>BP catalog for specific project shell</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Company BP Records</strong></td>
+                                    <td><span class="badge badge-post">POST</span></td>
+                                    <td><code>/bp/records/</code></td>
+                                    <td>Query records for company BP (e.g. Vendor)</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Project BP Records</strong></td>
+                                    <td><span class="badge badge-post">POST</span></td>
+                                    <td><code>/bp/records/{project_number}</code></td>
+                                    <td>Query records for project BP (e.g. Contract)</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>User Administration</strong></td>
+                                    <td><span class="badge badge-post">POST</span></td>
+                                    <td><code>/admin/user/get</code></td>
+                                    <td>Query Unifier user directory</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Download Attachment</strong></td>
+                                    <td><span class="badge badge-post">POST</span></td>
+                                    <td><code>/bp/record/file</code></td>
+                                    <td>Download binary document attachments</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB 2: ACTIVE PROJECTS -->
+            <div id="tabProjects" class="tab-content">
+                <div class="card">
+                    <div class="card-header">
+                        <div>
+                            <h2>📁 Active Projects & Shells</h2>
+                            <p class="subtitle">GET <code>/admin/projectshell?Status=Active</code></p>
+                        </div>
+                        <button id="btnFetchProjects" class="btn btn-primary"><i class="fa-solid fa-rocket"></i> Fetch Active Projects</button>
+                    </div>
+                    <div id="projectsResult" class="result-area"></div>
+                </div>
+            </div>
+
+            <!-- TAB 3: COMPANY BPs -->
+            <div id="tabCompanyBP" class="tab-content">
+                <div class="card margin-bottom">
+                    <div class="card-header">
+                        <div>
+                            <h3>📋 Load Company Business Process Catalog</h3>
+                            <p class="subtitle">GET <code>/admin/bps</code></p>
+                        </div>
+                        <button id="btnFetchCompanyBPCatalog" class="btn btn-secondary"><i class="fa-solid fa-list"></i> Load BP Catalog</button>
+                    </div>
+                    <div id="companyBPCatalogResult"></div>
+                </div>
+
+                <div class="card">
+                    <h3>🏢 Query Company BP Records</h3>
+                    <p class="subtitle">POST <code>/bp/records/</code></p>
+                    
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label>BP Name (bpname)</label>
+                            <input type="text" id="companyBpName" class="form-control" value="Vendor">
+                        </div>
+                        <div class="form-group">
+                            <label>Filter Condition (Optional)</label>
+                            <input type="text" id="companyFilterCond" class="form-control" placeholder="e.g. record_no=VEN-0000006">
+                        </div>
+                    </div>
+
+                    <div class="checkbox-group">
+                        <label><input type="checkbox" id="c_lineitem"> Include Line Items</label>
+                        <label><input type="checkbox" id="c_lineitem_file"> Include Line Files</label>
+                        <label><input type="checkbox" id="c_general_comments"> Include Comments</label>
+                        <label><input type="checkbox" id="c_attach_all_publications"> Attach Publications</label>
+                    </div>
+
+                    <button id="btnFetchCompanyBPRecords" class="btn btn-primary margin-top"><i class="fa-solid fa-paper-plane"></i> Fetch Company BP Records</button>
+                    <div id="companyBPRecordsResult" class="result-area margin-top"></div>
+                </div>
+            </div>
+
+            <!-- TAB 4: PROJECT BPs -->
+            <div id="tabProjectBP" class="tab-content">
+                <div class="card margin-bottom">
+                    <div class="card-header">
+                        <div>
+                            <h3>📋 Load Project BP Catalog</h3>
+                            <p class="subtitle">GET <code>/admin/bps/{project_number}</code></p>
+                        </div>
+                        <div class="inline-inputs">
+                            <input type="text" id="projCatNo" class="form-control inline-input" placeholder="Project Number (e.g. 001)">
+                            <button id="btnFetchProjectBPCatalog" class="btn btn-secondary"><i class="fa-solid fa-list"></i> Load Catalog</button>
+                        </div>
+                    </div>
+                    <div id="projectBPCatalogResult"></div>
+                </div>
+
+                <div class="card">
+                    <h3>🏗️ Query Project BP Records</h3>
+                    <p class="subtitle">POST <code>/bp/records/{project_number}</code></p>
+
+                    <div class="grid-3">
+                        <div class="form-group">
+                            <label>Project Number</label>
+                            <input type="text" id="projectNo" class="form-control" value="001">
+                        </div>
+                        <div class="form-group">
+                            <label>BP Name (bpname)</label>
+                            <input type="text" id="projectBpName" class="form-control" value="Contract">
+                        </div>
+                        <div class="form-group">
+                            <label>Filter Condition (Optional)</label>
+                            <input type="text" id="projectFilterCond" class="form-control" placeholder="e.g. record_no=CON-0000001">
+                        </div>
+                    </div>
+
+                    <div class="checkbox-group">
+                        <label><input type="checkbox" id="p_lineitem"> Include Line Items</label>
+                        <label><input type="checkbox" id="p_lineitem_file"> Include Line Files</label>
+                        <label><input type="checkbox" id="p_general_comments"> Include Comments</label>
+                        <label><input type="checkbox" id="p_attach_all_publications"> Attach Publications</label>
+                    </div>
+
+                    <button id="btnFetchProjectBPRecords" class="btn btn-primary margin-top"><i class="fa-solid fa-paper-plane"></i> Fetch Project BP Records</button>
+                    <div id="projectBPRecordsResult" class="result-area margin-top"></div>
+                </div>
+            </div>
+
+            <!-- TAB 5: ATTACHMENTS -->
+            <div id="tabAttachments" class="tab-content">
+                <div class="card">
+                    <h3>📎 File Attachment Downloader</h3>
+                    <p class="subtitle">POST <code>/bp/record/file</code></p>
+
+                    <div class="form-group">
+                        <label>Payload JSON</label>
+                        <textarea id="filePayload" class="form-control code-font" rows="6">{
+  "bpname": "Contract",
+  "record_no": "CON-0000001",
+  "file_name": "sample_document.pdf"
+}</textarea>
+                    </div>
+
+                    <button id="btnDownloadFile" class="btn btn-primary"><i class="fa-solid fa-download"></i> Download File</button>
+                    <div id="downloadResult" class="result-area margin-top"></div>
+                </div>
+            </div>
+
+            <!-- TAB 6: USER ADMIN -->
+            <div id="tabUsers" class="tab-content">
+                <div class="card">
+                    <div class="card-header">
+                        <div>
+                            <h2>👥 User Administration Directory</h2>
+                            <p class="subtitle">POST <code>/admin/user/get</code></p>
+                        </div>
+                        <div class="inline-inputs">
+                            <input type="text" id="userFilterCond" class="form-control inline-input" placeholder="Filter e.g. uuu_user_status=1">
+                            <button id="btnFetchUsers" class="btn btn-primary"><i class="fa-solid fa-users-gear"></i> Fetch Users</button>
+                        </div>
+                    </div>
+                    <div id="usersResult" class="result-area"></div>
+                </div>
+            </div>
+
+            <!-- TAB 7: API EXPLORER -->
+            <div id="tabExplorer" class="tab-content">
+                <div class="card">
+                    <h2>⚡ Custom REST API Explorer</h2>
+                    <p class="subtitle">Test any Primavera Unifier REST endpoint dynamically</p>
+
+                    <div class="grid-3">
+                        <div class="form-group">
+                            <label>HTTP Method</label>
+                            <select id="expMethod" class="form-control">
+                                <option value="GET">GET</option>
+                                <option value="POST" selected>POST</option>
+                                <option value="PUT">PUT</option>
+                                <option value="DELETE">DELETE</option>
+                            </select>
+                        </div>
+                        <div class="form-group col-span-2">
+                            <label>Endpoint or Full URL</label>
+                            <input type="text" id="expEndpoint" class="form-control" value="/bp/records/">
+                        </div>
+                    </div>
+
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label>Request Body (JSON)</label>
+                            <textarea id="expBody" class="form-control code-font" rows="6">{
+  "bpname": "Vendor",
+  "lineitem": "no"
+}</textarea>
+                        </div>
+                        <div class="form-group">
+                            <label>Custom Headers (JSON)</label>
+                            <textarea id="expHeaders" class="form-control code-font" rows="6">{
+  "X-Custom-Header": "UnifierCustomPortal"
+}</textarea>
+                        </div>
+                    </div>
+
+                    <button id="btnExecCustom" class="btn btn-primary"><i class="fa-solid fa-play"></i> Execute Request</button>
+                    <div id="explorerResult" class="result-area margin-top"></div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <!-- FLOATING CHATBOT WIDGET -->
+    <div class="chatbot-wrapper">
+        <button id="btnToggleChat" class="chatbot-trigger-btn">
+            <i class="fa-solid fa-comments"></i>
+            <span>AI Chatbot</span>
+        </button>
+
+        <div id="chatWindow" class="chat-window" style="display: none;">
+            <div class="chat-header">
+                <div class="chat-header-title">
+                    <i class="fa-solid fa-robot"></i>
+                    <span>Primavera Unifier AI Assistant</span>
+                </div>
+                <button id="btnCloseChat" class="chat-close-btn">&times;</button>
+            </div>
+
+            <div id="chatMessages" class="chat-messages">
+                <div class="message assistant">
+                    <div class="message-content">Hello! I am your Primavera Unifier AI Assistant. How can I help you today?</div>
+                </div>
+            </div>
+
+            <div class="chat-input-area">
+                <input type="text" id="chatInput" placeholder="Ask anything about your Unifier data..." autocomplete="off">
+                <button id="btnSendChat" class="btn-send"><i class="fa-solid fa-paper-plane"></i></button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Custom App JS -->
+    <script src="/static/app.js"></script>
+</body>
+</html>

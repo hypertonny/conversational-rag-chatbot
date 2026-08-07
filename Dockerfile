@@ -1,7 +1,7 @@
 # Use official lightweight Python image
 FROM python:3.12-slim
 
-# Set environment variables for Python, Streamlit, and HuggingFace cache
+# Set environment variables for Python and HuggingFace cache
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PORT=8501 \
@@ -38,12 +38,12 @@ RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTr
 # Copy application source code
 COPY . .
 
-# Expose Streamlit port
+# Expose web server port
 EXPOSE 8501
 
 # Health check for Dokploy / Docker
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8501/_stcore/health || exit 1
+    CMD curl -f http://localhost:8501/api/health || exit 1
 
-# Launch Streamlit app
-CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+# Launch FastAPI application using Uvicorn
+CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8501"]
