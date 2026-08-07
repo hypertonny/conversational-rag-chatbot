@@ -505,20 +505,121 @@ class ChatbotEngine:
 
             return "\n".join(lines)
 
+        # ── TOOL 11: Smart Project User Lookup ───────────────────────────
+        @tool
+        def query_project_users(project_number: str) -> str:
+            """
+            Smart search for users/people assigned to a specific project.
+            Strategy: scans ALL available Business Processes for the project and extracts
+            every user-related field (assigned_to, creator, owner, manager, responsible, etc.).
+            Returns a clear table of found users and their roles.
+            Use when user asks 'who is assigned to project X', 'people in project X', 'users of project X'.
+            Args:
+                project_number: The project number exactly as shown (e.g. '000001', '001').
+            """
+            try:
+                # Step 1: Get all BPs for this project
+                ok, bp_data, code, _ = client.get_project_bp_list(project_number)
+                if not ok:
+                    return f"Could not fetch BPs for project '{project_number}' (HTTP {code}): {bp_data}"
+                bp_records = _extract_records(bp_data)
+                if not bp_records:
+                    return f"No Business Processes found for project '{project_number}'."
+
+                bp_names = []
+                for r in bp_records:
+                    if isinstance(r, dict):
+                        n = r.get("bp_name") or r.get("bp_model_name") or ""
+                        if n:
+                            bp_names.append(str(n))
+
+                # User-related field names to look for
+                USER_FIELDS = {
+                    "assigned_to", "assignedto", "creator", "created_by", "createdby",
+                    "owner", "owner_id", "manager", "project_manager", "responsible",
+                    "user", "user_name", "username", "modified_by", "modifiedby",
+                    "contact", "contact_name", "submitted_by", "approved_by",
+                    "reviewer", "approver", "author", "supervisor"
+                }
+
+                # Step 2: Scan each BP for user fields
+                found_users: list = []  # list of dicts: {project, bp, field, value}
+                bps_with_users = 0
+
+                for bp_name in bp_names[:20]:  # check first 20 BPs max
+                    try:
+                        ok2, rec_data, _, _ = client.get_project_bp_records(
+                            project_number=project_number, bpname=bp_name
+                        )
+                        if not ok2:
+                            continue
+                        recs = _extract_records(rec_data)
+                        bp_had_user = False
+                        for rec in recs[:10]:  # check first 10 records per BP
+                            if not isinstance(rec, dict):
+                                continue
+                            for k, v in rec.items():
+                                if k.lower().replace("-", "_") in USER_FIELDS and v:
+                                    found_users.append({
+                                        "Project": project_number,
+                                        "BP": bp_name,
+                                        "Field": k,
+                                        "Value": str(v)
+                                    })
+                                    bp_had_user = True
+                        if bp_had_user:
+                            bps_with_users += 1
+                    except Exception:
+                        continue
+
+                if not found_users:
+                    return (
+                        f"Project '{project_number}' has {len(bp_names)} BPs. "
+                        f"No user assignment fields (assigned_to, creator, owner, manager, etc.) "
+                        f"found in the first 20 BPs. The project may not have assignee data in its BP records, "
+                        f"or user assignments may be stored differently on this Unifier instance."
+                    )
+
+                # Deduplicate by value
+                seen = set()
+                unique_users = []
+                for u in found_users:
+                    key = (u["BP"], u["Field"], u["Value"])
+                    if key not in seen:
+                        seen.add(key)
+                        unique_users.append(u)
+
+                # Format as markdown table
+                lines = [
+                    f"### Users found in Project '{project_number}'",
+                    f"Scanned {len(bp_names)} BPs, found user data in {bps_with_users} BPs.\n",
+                    "| Business Process | Field | Assigned User/Value |",
+                    "|---|---|---|"
+                ]
+                for u in unique_users[:50]:
+                    lines.append(f"| {u['BP']} | {u['Field']} | {u['Value']} |")
+                if len(unique_users) > 50:
+                    lines.append(f"\n... and {len(unique_users) - 50} more entries.")
+
+                return "\n".join(lines)
+            except Exception as e:
+                return f"Error scanning project '{project_number}' for users: {e}"
+
         tools = [
-            query_active_projects,           # GET  /admin/projectshell?Status=Active
-            query_company_bp_catalog,         # GET  /admin/bps
-            query_project_bp_catalog,         # GET  /admin/bps/{project_number}
-            query_company_bp_records,         # POST /bp/records/              (all + optional filter)
-            query_specific_company_bp_record, # POST /bp/records/              (filter by record_no)
-            query_project_bp_records,         # POST /bp/records/{project}     (all + optional filter)
-            query_specific_project_bp_record, # POST /bp/records/{project}     (filter by record_no)
-            query_user_directory,             # POST /admin/user/get
-            query_users_filtered,             # POST /admin/user/get           (with filterCondition)
-            query_full_database_summary,      # All endpoints combined
+            query_active_projects,            # GET  /admin/projectshell?Status=Active
+            query_company_bp_catalog,          # GET  /admin/bps
+            query_project_bp_catalog,          # GET  /admin/bps/{project_number}
+            query_company_bp_records,          # POST /bp/records/
+            query_specific_company_bp_record,  # POST /bp/records/ (by record_no)
+            query_project_bp_records,          # POST /bp/records/{project}
+            query_specific_project_bp_record,  # POST /bp/records/{project} (by record_no)
+            query_user_directory,              # POST /admin/user/get
+            query_users_filtered,              # POST /admin/user/get (with filter)
+            query_project_users,               # Smart: scans ALL project BPs for user fields
+            query_full_database_summary,       # All endpoints combined
         ]
 
-        # ── Build LLM ────────────────────────────────────────────────────────
+        # \u2500\u2500 Build LLM \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
         try:
             if provider == "groq":
                 if not self.groq_api_key:
@@ -542,35 +643,43 @@ class ChatbotEngine:
         except Exception as e:
             return f"Failed to initialise LLM: {e}"
 
-        # ── System Prompt ────────────────────────────────────────────────────
+        # \u2500\u2500 System Prompt \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
         system_prompt = (
             "You are a STRICT Oracle Primavera Unifier database assistant. "
             "Unifier is a construction project management platform.\n"
-            "You ONLY answer questions about data stored in this organisation's Unifier database.\n\n"
-            "TOOLS AVAILABLE (10 live tools — call them to get real data):\n"
-            "  1. query_active_projects — all active project shells (name, number, status, type)\n"
-            "  2. query_company_bp_catalog — list of all Company-level Business Processes\n"
-            "  3. query_project_bp_catalog(project_number) — BPs available for a project\n"
-            "  4. query_company_bp_records(bpname) — all records in a Company BP\n"
-            "  5. query_specific_company_bp_record(bpname, record_no) — one specific Company BP record\n"
-            "  6. query_project_bp_records(project_number, bpname) — all records in a Project BP\n"
-            "  7. query_specific_project_bp_record(project_number, bpname, record_no) — one specific Project BP record\n"
-            "  8. query_user_directory — full user list from /admin/user/get\n"
-            "  9. query_users_filtered(filter_value) — search for a specific user by name or email\n"
-            " 10. query_full_database_summary — comprehensive overview of all endpoints\n\n"
+            "You ONLY answer questions about data stored in this Unifier database.\n\n"
+            "TOOLS AVAILABLE (11 live tools \u2014 call them to get real data):\n"
+            "  1.  query_active_projects \u2014 all active project shells (name, number, status, type)\n"
+            "  2.  query_company_bp_catalog \u2014 list of all Company-level Business Processes\n"
+            "  3.  query_project_bp_catalog(project_number) \u2014 BPs for a project\n"
+            "  4.  query_company_bp_records(bpname) \u2014 all records in a Company BP\n"
+            "  5.  query_specific_company_bp_record(bpname, record_no) \u2014 one Company BP record by ID\n"
+            "  6.  query_project_bp_records(project_number, bpname) \u2014 all records in a Project BP\n"
+            "  7.  query_specific_project_bp_record(project_number, bpname, record_no) \u2014 one Project BP record\n"
+            "  8.  query_user_directory \u2014 full user list from /admin/user/get\n"
+            "  9.  query_users_filtered(filter_value) \u2014 search user by name or email\n"
+            "  10. query_project_users(project_number) \u2014 SMART: scans ALL project BPs to find assigned users\n"
+            "  11. query_full_database_summary \u2014 overview from all endpoints\n\n"
             "STRICT RULES:\n"
-            "1. SCOPE: You ONLY answer questions about this Unifier database. "
-            "If asked about anything outside Unifier (news, geography, politics, general knowledge, people outside the system), "
-            "respond EXACTLY: 'I can only answer questions about your Primavera Unifier database. "
+            "1. SCOPE: ONLY answer Unifier database questions. For any out-of-scope question "
+            "(politics, news, general knowledge, geography) respond EXACTLY: "
+            "'I can only answer questions about your Primavera Unifier database. "
             "I cannot answer general knowledge questions.'\n"
             "2. ALWAYS call the right tool before answering. NEVER fabricate or guess data.\n"
-            "3. For 'users in a project': first call query_project_bp_catalog to find BPs, "
-            "then call query_project_bp_records for each BP to find user/assignee fields. "
-            "Look for fields named 'assigned_to', 'creator', 'owner', 'user', 'manager', 'responsible'.\n"
-            "4. For 'all data' or 'give me everything': call query_full_database_summary.\n"
-            "5. For a specific record (record_no given): use query_specific_company_bp_record or query_specific_project_bp_record.\n"
-            "6. Report field names and values clearly. If a tool returns an error, report it and suggest checking permissions.\n"
-            "7. Temperature=0 mindset: report only what the tools return. Zero invention.\n"
+            "3. OUTPUT FORMAT \u2014 MANDATORY:\n"
+            "   - ALWAYS present lists, records, and data as MARKDOWN TABLES.\n"
+            "   - Use | Column | Column | format with a header separator row |---|---|\n"
+            "   - For projects table: columns = | # | Project Name | Project Number | Status | Type |\n"
+            "   - For users table: columns = | # | Name/Username | Role/Field | Source BP |\n"
+            "   - For BP records: present key fields as a table.\n"
+            "4. For 'users in project X': call query_project_users(project_number). "
+            "This smart tool scans ALL BPs and extracts every user-related field.\n"
+            "5. For 'give me 5 projects and their users': "
+            "call query_active_projects to get project list, then call query_project_users "
+            "for each of the 5 projects, combine results into a unified markdown table.\n"
+            "6. For 'all data': call query_full_database_summary.\n"
+            "7. For a specific record (record_no given): use query_specific_company_bp_record or query_specific_project_bp_record.\n"
+            "8. Report the HTTP status code and raw response if a tool fails so the user can debug.\n"
         )
 
         messages: list = [("system", system_prompt)]
@@ -581,7 +690,7 @@ class ChatbotEngine:
                 messages.append((role, content))
         messages.append(("user", user_query))
 
-        # ── Run Agent ────────────────────────────────────────────────────────
+        # \u2500\u2500 Run Agent \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
         try:
             agent_executor = create_react_agent(llm, tools)
             response = agent_executor.invoke({"messages": messages})

@@ -500,3 +500,91 @@ code, textarea.code-font {
     .sidebar { width: 100%; height: auto; position: static; }
     .grid-2, .grid-3 { grid-template-columns: 1fr; }
 }
+
+/* ── MARKDOWN TABLE STYLES (for chatbot responses) ─────────────────── */
+.message-content table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0;
+    font-size: 0.85rem;
+    background: #0e1117;
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    display: block;
+    overflow-x: auto;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+}
+
+.message-content table thead tr {
+    background: linear-gradient(90deg, #1a2d4d 0%, #1a3a5c 100%);
+    border-bottom: 2px solid var(--accent-blue);
+}
+
+.message-content table th {
+    padding: 10px 14px;
+    text-align: left;
+    color: var(--accent-blue);
+    font-weight: 700;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+}
+
+.message-content table td {
+    padding: 8px 14px;
+    border-bottom: 1px solid #1e2d45;
+    color: var(--text-main);
+    vertical-align: top;
+}
+
+.message-content table tbody tr:hover {
+    background: #1a2d4d55;
+    transition: background 0.15s ease;
+}
+
+.message-content table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.message-content table tbody tr:nth-child(even) {
+    background: #12192600;
+}
+
+/* code blocks inside chat */
+.message-content pre {
+    background: #0e1117;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 10px 14px;
+    overflow-x: auto;
+    font-size: 0.82rem;
+    margin: 8px 0;
+}
+
+.message-content code {
+    background: #1a2d4d;
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-size: 0.85em;
+    color: var(--accent-blue);
+}
+
+.message-content ul, .message-content ol {
+    padding-left: 1.4em;
+    margin: 6px 0;
+}
+
+.message-content li {
+    margin: 3px 0;
+}
+
+.message-content strong {
+    color: var(--accent-blue);
+    font-weight: 700;
+}
+
+.message-content h3, .message-content h4 {
+    color: var(--accent-blue);
+    margin: 10px 0 5px;
+}
