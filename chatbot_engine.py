@@ -206,34 +206,28 @@ class ChatbotEngine:
 
         # ── TOOL 4: Company BP Records (all) ────────────────────────────────
         @tool
-        def query_company_bp_records(bpname: str, filter_condition: str = "") -> str:
+        def query_company_bp_records(bpname: str) -> str:
             """
             Fetches all records inside a specific Company-level Business Process.
             Endpoint: POST /bp/records/
             Returns full detail including all fields, line items, comments and attachments.
             Use when user asks about all records in a company BP like 'Vendor', 'Contract', 'Invoice'.
-            To filter to a specific record use filter_condition e.g. 'record_no=VEN-0000006'.
+            NOTE: To look up ONE specific record by ID, use query_specific_company_bp_record instead.
             Args:
                 bpname: The exact BP name (e.g. 'Vendor', 'Contract', 'RFI').
-                filter_condition: Optional filter string e.g. 'record_no=VEN-0000006' (default: fetch all).
             """
             try:
-                success, data, status_code, _ = client.get_company_bp_records(
-                    bpname=bpname,
-                    filter_condition=filter_condition or ""
-                )
+                success, data, status_code, _ = client.get_company_bp_records(bpname=bpname)
                 if not success:
                     return f"Company BP Records API failed for BP '{bpname}' (HTTP {status_code}): {data}"
                 records = _extract_records(data)
                 total = len(records)
                 if total == 0:
-                    filter_note = f" (filter: {filter_condition})" if filter_condition else ""
-                    return f"No records found in Company BP '{bpname}'{filter_note}."
+                    return f"No records found in Company BP '{bpname}'."
 
                 field_keys = list(records[0].keys()) if isinstance(records[0], dict) else []
-                filter_note = f" [Filter: {filter_condition}]" if filter_condition else ""
                 lines = [
-                    f"Company BP '{bpname}'{filter_note}: {total} total records",
+                    f"Company BP '{bpname}': {total} total records",
                     f"Fields available: {', '.join(field_keys)}",
                     "",
                     "Records (first 20):"
@@ -282,38 +276,34 @@ class ChatbotEngine:
             except Exception as e:
                 return f"Error fetching specific record '{record_no}' from BP '{bpname}': {e}"
 
-        # ── TOOL 6: Project BP Records (all + optional filter) ───────────────
+        # ── TOOL 6: Project BP Records (all records) ─────────────────────
         @tool
-        def query_project_bp_records(project_number: str, bpname: str, filter_condition: str = "") -> str:
+        def query_project_bp_records(project_number: str, bpname: str) -> str:
             """
-            Fetches all records inside a Business Process for a specific project.
+            Fetches ALL records inside a Business Process for a specific project/shell.
             Endpoint: POST /bp/records/{project_number}
             Returns full detail of every record including all fields, line items, comments, attachments.
-            Use when user asks about records in a BP within a specific project.
-            To filter to a specific record use filter_condition e.g. 'record_no=CON-0000001'.
+            Use this to discover who is assigned to a project or what work is being done.
+            NOTE: To look up ONE specific record by ID, use query_specific_project_bp_record instead.
             Args:
-                project_number: The project number (e.g. '001').
-                bpname: The BP name (e.g. 'Contract', 'RFI', 'Submittal').
-                filter_condition: Optional filter string e.g. 'record_no=CON-0000001'.
+                project_number: The project number exactly as shown (e.g. '000001', '001', '0000567').
+                bpname: The BP name (e.g. 'Contract', 'RFI', 'Submittal', 'Vendor').
             """
             try:
                 success, data, status_code, _ = client.get_project_bp_records(
                     project_number=project_number,
-                    bpname=bpname,
-                    filter_condition=filter_condition or ""
+                    bpname=bpname
                 )
                 if not success:
                     return f"Project BP Records API failed for project '{project_number}' BP '{bpname}' (HTTP {status_code}): {data}"
                 records = _extract_records(data)
                 total = len(records)
                 if total == 0:
-                    filter_note = f" (filter: {filter_condition})" if filter_condition else ""
-                    return f"No records found in BP '{bpname}' for project '{project_number}'{filter_note}."
+                    return f"No records found in BP '{bpname}' for project '{project_number}'."
 
                 field_keys = list(records[0].keys()) if isinstance(records[0], dict) else []
-                filter_note = f" [Filter: {filter_condition}]" if filter_condition else ""
                 lines = [
-                    f"Project '{project_number}' | BP '{bpname}'{filter_note}: {total} total records",
+                    f"Project '{project_number}' | BP '{bpname}': {total} total records",
                     f"Fields available: {', '.join(field_keys)}",
                     "",
                     "Records (first 20):"
@@ -554,30 +544,33 @@ class ChatbotEngine:
 
         # ── System Prompt ────────────────────────────────────────────────────
         system_prompt = (
-            "You are a knowledgeable AI assistant for Oracle Primavera Unifier — a construction project management system.\n"
-            "You have 10 live tools that query the Unifier REST API database in real-time.\n\n"
-            "TOOLS AVAILABLE:\n"
-            "  1. query_active_projects — list all active project shells (name, number, status, type, all fields)\n"
-            "  2. query_company_bp_catalog — list all Company-level Business Processes\n"
-            "  3. query_project_bp_catalog(project_number) — list BPs for a specific project\n"
-            "  4. query_company_bp_records(bpname, filter_condition?) — all records inside a Company BP\n"
-            "  5. query_specific_company_bp_record(bpname, record_no) — one specific Company BP record by ID\n"
-            "  6. query_project_bp_records(project_number, bpname, filter_condition?) — records inside a Project BP\n"
+            "You are a STRICT Oracle Primavera Unifier database assistant. "
+            "Unifier is a construction project management platform.\n"
+            "You ONLY answer questions about data stored in this organisation's Unifier database.\n\n"
+            "TOOLS AVAILABLE (10 live tools — call them to get real data):\n"
+            "  1. query_active_projects — all active project shells (name, number, status, type)\n"
+            "  2. query_company_bp_catalog — list of all Company-level Business Processes\n"
+            "  3. query_project_bp_catalog(project_number) — BPs available for a project\n"
+            "  4. query_company_bp_records(bpname) — all records in a Company BP\n"
+            "  5. query_specific_company_bp_record(bpname, record_no) — one specific Company BP record\n"
+            "  6. query_project_bp_records(project_number, bpname) — all records in a Project BP\n"
             "  7. query_specific_project_bp_record(project_number, bpname, record_no) — one specific Project BP record\n"
-            "  8. query_user_directory — all users with full details\n"
+            "  8. query_user_directory — full user list from /admin/user/get\n"
             "  9. query_users_filtered(filter_value) — search for a specific user by name or email\n"
-            " 10. query_full_database_summary — overview of everything: projects + BPs + users\n\n"
-            "RULES:\n"
-            "1. Greet the user warmly for casual messages. For all data questions, use tools.\n"
-            "2. ALWAYS call the appropriate tool FIRST before answering any data question. NEVER guess or fabricate.\n"
-            "3. When a user asks about 'all data' or 'everything', call query_full_database_summary.\n"
-            "4. When a user asks about a SPECIFIC record (gives a record number like VEN-0000006), "
-            "use query_specific_company_bp_record or query_specific_project_bp_record.\n"
-            "5. For project-level BP records, always ask the user for the project number if not provided.\n"
-            "6. Report results clearly with counts, field names, and specific values from the tool output.\n"
-            "7. If a user asks about users assigned to a project, call query_user_directory AND explain that "
-            "project-specific user assignments are stored inside BP records (e.g. Contract, RFI).\n"
-            "8. Never use external knowledge. All answers must come from tool results.\n"
+            " 10. query_full_database_summary — comprehensive overview of all endpoints\n\n"
+            "STRICT RULES:\n"
+            "1. SCOPE: You ONLY answer questions about this Unifier database. "
+            "If asked about anything outside Unifier (news, geography, politics, general knowledge, people outside the system), "
+            "respond EXACTLY: 'I can only answer questions about your Primavera Unifier database. "
+            "I cannot answer general knowledge questions.'\n"
+            "2. ALWAYS call the right tool before answering. NEVER fabricate or guess data.\n"
+            "3. For 'users in a project': first call query_project_bp_catalog to find BPs, "
+            "then call query_project_bp_records for each BP to find user/assignee fields. "
+            "Look for fields named 'assigned_to', 'creator', 'owner', 'user', 'manager', 'responsible'.\n"
+            "4. For 'all data' or 'give me everything': call query_full_database_summary.\n"
+            "5. For a specific record (record_no given): use query_specific_company_bp_record or query_specific_project_bp_record.\n"
+            "6. Report field names and values clearly. If a tool returns an error, report it and suggest checking permissions.\n"
+            "7. Temperature=0 mindset: report only what the tools return. Zero invention.\n"
         )
 
         messages: list = [("system", system_prompt)]
