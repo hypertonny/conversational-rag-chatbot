@@ -48,23 +48,68 @@ class ChatbotEngine:
         return (self.openai_api_key or self.groq_api_key) and self.vector_store is not None
 
     def ingest_json_data(self, data: Any, source_name: str = "unifier_api"):
-        """Ingest arbitrary JSON data from the Unifier API into the vector store."""
+        """Ingest JSON data from Unifier API into vector store with structured summaries and record sentences."""
         if not self.vector_store:
             return False, "Vector store not initialized."
 
-        # Convert JSON to string representation for embedding
-        if isinstance(data, (dict, list)):
-            text_data = json.dumps(data, indent=2)
+        records = []
+        if isinstance(data, dict):
+            if "data" in data and isinstance(data["data"], list):
+                records = data["data"]
+            elif "data" in data and isinstance(data["data"], dict):
+                records = [data["data"]]
+            else:
+                records = [data]
+        elif isinstance(data, list):
+            records = data
         else:
-            text_data = str(data)
+            records = [{"content": str(data)}]
 
-        # Split text
-        chunks = self.text_splitter.split_text(text_data)
-        documents = [Document(page_content=chunk, metadata={"source": source_name}) for chunk in chunks]
+        documents = []
+        total_count = len(records)
 
-        # Add to Chroma
-        self.vector_store.add_documents(documents)
-        return True, f"Ingested {len(documents)} chunks from {source_name}."
+        # 1. GENERATE MASTER SUMMARY DOCUMENT FOR AGGREGATE QA (Counts, Totals, Summaries)
+        sample_names = []
+        for r in records[:20]:
+            if isinstance(r, dict):
+                name = r.get("projectname") or r.get("bp_name") or r.get("user_name") or r.get("first_name") or r.get("record_no") or str(r)
+                pnum = r.get("projectnumber") or r.get("project_number") or ""
+                if pnum:
+                    sample_names.append(f"{name} (No: {pnum})")
+                else:
+                    sample_names.append(str(name))
+
+        summary_text = (
+            f"Unifier Database Dataset Summary for {source_name}:\n"
+            f"Total records count in database for {source_name}: {total_count}.\n"
+            f"Sample records present in {source_name}: {', '.join(sample_names)}.\n"
+            f"Dataset Source: {source_name}."
+        )
+        documents.append(Document(page_content=summary_text, metadata={"source": source_name, "type": "summary"}))
+
+        # 2. GENERATE STRUCTURED INDIVIDUAL RECORD SENTENCES
+        record_sentences = []
+        for idx, r in enumerate(records[:1000]): # Ingest up to 1000 records per dataset cleanly
+            if isinstance(r, dict):
+                sentence_parts = [f"{source_name} Record #{idx+1}:"]
+                for k, v in r.items():
+                    if isinstance(v, (dict, list)):
+                        continue
+                    sentence_parts.append(f"{k}: {v}")
+                record_sentences.append(" | ".join(sentence_parts))
+            else:
+                record_sentences.append(f"{source_name} Record #{idx+1}: {str(r)}")
+
+        full_records_text = "\n".join(record_sentences)
+        chunks = self.text_splitter.split_text(full_records_text)
+        for chunk in chunks:
+            documents.append(Document(page_content=chunk, metadata={"source": source_name, "type": "record"}))
+
+        try:
+            self.vector_store.add_documents(documents)
+            return True, f"Ingested master summary + {len(documents)} document chunks for {source_name} ({total_count} records)."
+        except Exception as e:
+            return False, f"Failed to ingest to vector store: {str(e)}"
 
     def get_chat_response(self, user_query: str, chat_history: List[Dict[str, str]] = [], provider: str = "openai") -> str:
         """Query the vector database and generate a response using LLM."""
@@ -74,7 +119,15 @@ class ChatbotEngine:
         # --- STEP 1: RETRIEVE FROM VECTOR DATABASE ---
         docs = []
         try:
-            docs = self.vector_store.similarity_search(user_query, k=5)
+            docs = self.vector_store.similarity_search(user_query, k=6)
+            
+            # If query is aggregate/summary, also include dataset summary documents
+            query_lower = user_query.lower()
+            if any(term in query_lower for term in ["how many", "total", "count", "active project", "company bp", "project", "info", "summary", "list", "have"]):
+                summary_docs = self.vector_store.similarity_search("Unifier Database Dataset Summary", k=4)
+                for s_doc in summary_docs:
+                    if s_doc.page_content not in [d.page_content for d in docs]:
+                        docs.append(s_doc)
         except Exception:
             docs = []
 
