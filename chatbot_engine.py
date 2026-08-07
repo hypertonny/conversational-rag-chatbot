@@ -71,21 +71,20 @@ class ChatbotEngine:
         if not self.is_ready():
             return "Chatbot is not ready. Please provide an API Key in the sidebar."
 
-        # Set up LLM based on provider
+        # Set up LLM based on provider with low temperature for factual precision
         if provider == "groq":
             if not self.groq_api_key:
                 return "Groq API key is missing. Please provide it in the sidebar."
-            # Use llama-3.3-70b-versatile or fallback to llama3-8b-8192 / llama-3.1-8b-instant
             try:
                 llm = ChatGroq(
                     model_name="llama-3.3-70b-versatile",
-                    temperature=0.4,
+                    temperature=0.1,
                     groq_api_key=self.groq_api_key
                 )
             except Exception:
                 llm = ChatGroq(
                     model_name="llama-3.1-8b-instant",
-                    temperature=0.4,
+                    temperature=0.1,
                     groq_api_key=self.groq_api_key
                 )
         else:
@@ -93,29 +92,30 @@ class ChatbotEngine:
                 return "OpenAI API key is missing. Please provide it in the sidebar."
             llm = ChatOpenAI(
                 model="gpt-3.5-turbo",
-                temperature=0.4,
+                temperature=0.1,
                 openai_api_key=self.openai_api_key
             )
 
-        # Build system prompt for open conversational QA with context prioritization
+        # Build strict system prompt for database-scoped RAG QA
         system_prompt = (
-            "You are a friendly, highly intelligent conversational AI assistant for Oracle Primavera Unifier and general construction project management.\n"
-            "You can answer ANY question the user asks—whether about Primavera Unifier APIs, fetched data, project management, or general queries.\n"
-            "If retrieved context from the Unifier database is provided below, use it to give accurate, data-backed answers.\n"
-            "If the retrieved context does NOT contain the answer or is empty, rely on your extensive general knowledge to answer helpful and accurately.\n"
-            "Always format your response cleanly using Markdown.\n\n"
-            "Retrieved Unifier Data Context:\n{context}"
+            "You are a strict RAG-based AI Assistant for the Oracle Primavera Unifier Database.\n"
+            "STRICT RULES YOU MUST FOLLOW WITHOUT EXCEPTION:\n"
+            "1. ONLY answer questions that are directly related to Oracle Primavera Unifier database records, active projects, business processes, project management, or system users based on the retrieved context below.\n"
+            "2. If the user asks general trivia, world news, personal questions, or anything unrelated to Primavera Unifier / database records (e.g. 'who is pm of india', weather, general jokes), REJECT the question politely with:\n"
+            "   'I am a dedicated Oracle Primavera Unifier Database Assistant. I can only answer questions related to your fetched Unifier database records, projects, and business processes.'\n"
+            "3. If the retrieved context is empty or does not contain enough information to answer a Unifier database question, inform the user clearly:\n"
+            "   'No matching Unifier database records were found in loaded memory. Please use the dashboard tabs (e.g., Active Projects, Company BPs, User Admin) to fetch your data first.'\n"
+            "4. Never hallucinate or invent fake database records.\n"
+            "5. Always format your responses cleanly using Markdown.\n\n"
+            "Retrieved Unifier Database Context:\n{context}"
         )
 
         # Construct message list with conversation history
         messages = [("system", system_prompt)]
 
-        # Include prior conversation history (excluding the current user prompt which is passed as {input})
         if chat_history:
-            # Look at past messages (excluding the last one if it's identical to user_query)
             past_msgs = chat_history[:-1] if chat_history and chat_history[-1].get("content") == user_query else chat_history
-            # Keep last 6 exchanges for context window efficiency
-            for msg in past_msgs[-8:]:
+            for msg in past_msgs[-6:]:
                 role = "human" if msg.get("role") == "user" else "assistant"
                 messages.append((role, msg.get("content", "")))
 
@@ -129,17 +129,6 @@ class ChatbotEngine:
             chain = create_retrieval_chain(retriever, question_answer_chain)
 
             response = chain.invoke({"input": user_query})
-            return response.get("answer", "I couldn't generate a response.")
+            return response.get("answer", "I couldn't generate a response based on the retrieved database context.")
         except Exception as e:
-            # Fallback to direct LLM response if vector retriever fails or is empty
-            try:
-                direct_messages = [
-                    ("system", "You are a helpful AI assistant for Oracle Primavera Unifier and general queries. Format answers in Markdown."),
-                    ("human", user_query)
-                ]
-                direct_prompt = ChatPromptTemplate.from_messages(direct_messages)
-                direct_chain = direct_prompt | llm
-                res = direct_chain.invoke({})
-                return res.content
-            except Exception as inner_e:
-                return f"Error communicating with LLM: {str(e)} | {str(inner_e)}"
+            return f"Error querying database AI engine: {str(e)}"
