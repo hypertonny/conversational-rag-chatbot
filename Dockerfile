@@ -24,14 +24,18 @@ RUN pip install --no-cache-dir uv
 # Copy requirements FIRST to leverage Docker layer caching
 COPY requirements.txt .
 
-# Install Python packages using BuildKit cache mounts for ultra-fast builds
+# 1. Install CPU-only PyTorch first (Prevents downloading 3GB+ of CUDA/NVIDIA GPU bloat)
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system -r requirements.txt
+    uv pip install --system torch --index-url https://download.pytorch.org/whl/cpu
+
+# 2. Install remaining application dependencies
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
 # Pre-download SentenceTransformer embeddings model during build into cached layer
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
 
-# Copy application source code (changes to app code won't invalidate dependency/model layers)
+# Copy application source code
 COPY . .
 
 # Expose Streamlit port
