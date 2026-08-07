@@ -103,6 +103,43 @@ st.markdown("""
         border-radius: 8px;
         border: 1px solid #374151;
     }
+
+    /* Workflow Visualizer Stepper Styles */
+    .workflow-stepper {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background: #111827;
+        padding: 16px 20px;
+        border-radius: 12px;
+        border: 1px solid #1f2937;
+        margin: 16px 0;
+    }
+    
+    .wf-step {
+        text-align: center;
+        flex: 1;
+        position: relative;
+    }
+    
+    .wf-badge {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        font-size: 14px;
+        margin-bottom: 6px;
+    }
+    
+    .wf-done { background: #059669; color: #ffffff; box-shadow: 0 0 10px rgba(5, 150, 105, 0.5); }
+    .wf-active { background: #0284c7; color: #ffffff; box-shadow: 0 0 12px rgba(2, 132, 199, 0.7); border: 2px solid #38bdf8; }
+    .wf-pending { background: #374151; color: #9ca3af; }
+    
+    .wf-label { font-size: 12px; font-weight: 600; color: #e2e8f0; }
+    .wf-sub { font-size: 10px; color: #64748b; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -273,13 +310,14 @@ st.markdown("""
 
 
 # --- TABS NAVIGATION ---
-tab_overview, tab_projects, tab_company_bp, tab_project_bp, tab_files, tab_users, tab_explorer = st.tabs([
+tab_overview, tab_projects, tab_company_bp, tab_project_bp, tab_files, tab_users, tab_workflows, tab_explorer = st.tabs([
     "📊 Overview",
     "📁 Active Projects",
     "🏢 Company BPs",
     "🏗️ Project BPs",
     "📎 Attachments",
     "👥 User Admin",
+    "🔄 Workflows & Lifecycles",
     "⚡ API Explorer"
 ])
 
@@ -339,7 +377,31 @@ with tab_overview:
     | **Company BP Records** | `POST` | `/bp/records/` | `{"bpname": "Vendor", "lineitem": "yes"}` |
     | **Company Record Search** | `POST` | `/bp/records/` | `{"bpname": "Vendor", "filter_condition": "record_no=VEN-0000006"}` |
     | **Project BP Records** | `POST` | `/bp/records/{project_number}` | `{"bpname": "Contract", "lineitem": "yes"}` |
+    | **User Administration** | `POST` | `/admin/user/get` | `{"filterCondition": "uuu_user_status=1"}` |
     | **Download Record File** | `POST` | `/bp/record/file` | `{"bpname": "Contract", "record_no": "..."}` |
+    """)
+
+    st.markdown("### ⚡ End-to-End System & RAG Data Flow")
+    st.graphviz_chart("""
+    digraph {
+        graph [bgcolor="transparent", rankdir="LR", fontname="Inter"];
+        node [shape="rect", style="filled,rounded", fontname="Inter", fontsize=11, fontcolor="#ffffff"];
+        edge [fontname="Inter", fontsize=9, color="#475569", fontcolor="#94a3b8"];
+
+        unifier [label="🏛️ Oracle Primavera Unifier\n(REST API v1)", fillcolor="#1e293b", color="#3b82f6"];
+        client [label="⚡ Unifier API Client\n(Session Pool)", fillcolor="#1e293b", color="#38bdf8"];
+        dashboard [label="📊 Streamlit Dashboard\n(Interactive Portal)", fillcolor="#0f172a", color="#0ea5e9"];
+        chroma [label="🗄️ ChromaDB Vector Store\n(Local Embeddings)", fillcolor="#162e2d", color="#10b981"];
+        llm [label="🤖 Groq LPU / OpenAI LLM\n(Conversational Engine)", fillcolor="#2e1065", color="#a855f7"];
+        user [label="💬 User Floating Chatbot UI", fillcolor="#3b0764", color="#d8b4fe"];
+
+        unifier -> client [label="JSON Response"];
+        client -> dashboard [label="Data Tables & Charts"];
+        dashboard -> chroma [label="Auto Text Ingestion"];
+        user -> chroma [label="Vector Similarity Search"];
+        chroma -> llm [label="Context Window"];
+        llm -> user [label="RAG Answer Stream"];
+    }
     """)
 
 
@@ -700,7 +762,169 @@ with tab_users:
 
 
 # ==========================================
-# TAB 7: API EXPLORER & REST TESTER
+# TAB 7: WORKFLOWS & LIFECYCLES VISUALIZER
+# ==========================================
+with tab_workflows:
+    st.subheader("🔄 Primavera Unifier Business Process & Workflow Visualizer")
+    st.caption("Interactive lifecycle state diagrams, approval pipelines, and dynamic status distribution charts.")
+
+    wf_type = st.selectbox(
+        "Select Business Process Workflow Diagram",
+        [
+            "📜 Contract Lifecycle Workflow",
+            "🏢 Vendor Onboarding & Audit Workflow",
+            "📑 Request for Information (RFI) Approval Pipeline",
+            "👥 User Role & Access Authorization Workflow"
+        ]
+    )
+
+    if wf_type == "📜 Contract Lifecycle Workflow":
+        st.markdown("#### Contract Record State Diagram")
+        st.graphviz_chart("""
+        digraph {
+            graph [bgcolor="transparent", rankdir="LR", fontname="Inter"];
+            node [shape="rect", style="filled,rounded", fontname="Inter", fontsize=11, fontcolor="#ffffff"];
+            edge [fontname="Inter", fontsize=10, color="#64748b", fontcolor="#cbd5e1"];
+
+            draft [label="1. Draft\n(Initiator)", fillcolor="#334155", color="#64748b"];
+            review [label="2. Legal Review\n(Pending Review)", fillcolor="#1e3a8a", color="#3b82f6"];
+            approval [label="3. Management Approval\n(Pending Approval)", fillcolor="#78350f", color="#f59e0b"];
+            executed [label="4. Executed & Signed\n(Active Contract)", fillcolor="#064e3b", color="#10b981"];
+            amendment [label="5. Change Order / Amendment\n(In Revision)", fillcolor="#581c87", color="#a855f7"];
+            closed [label="6. Contract Closed\n(Completed)", fillcolor="#18181b", color="#71717a"];
+
+            draft -> review [label="Submit for Review"];
+            review -> approval [label="Legal Cleared"];
+            review -> draft [label="Reject / Revise"];
+            approval -> executed [label="Sign & Approve"];
+            approval -> draft [label="Send Back"];
+            executed -> amendment [label="Issue Change Order"];
+            amendment -> executed [label="Approve Change Order"];
+            executed -> closed [label="Final Acceptance"];
+        }
+        """)
+
+        st.markdown("""
+        <div class="workflow-stepper">
+            <div class="wf-step">
+                <div class="wf-badge wf-done">✓</div>
+                <div class="wf-label">Draft</div>
+                <div class="wf-sub">Record Initiated</div>
+            </div>
+            <div style="color:#475569; font-weight:bold;">➔</div>
+            <div class="wf-step">
+                <div class="wf-badge wf-done">✓</div>
+                <div class="wf-label">Legal Review</div>
+                <div class="wf-sub">Contracts Team</div>
+            </div>
+            <div style="color:#475569; font-weight:bold;">➔</div>
+            <div class="wf-step">
+                <div class="wf-badge wf-active">3</div>
+                <div class="wf-label">Approval</div>
+                <div class="wf-sub">PMO Manager</div>
+            </div>
+            <div style="color:#475569; font-weight:bold;">➔</div>
+            <div class="wf-step">
+                <div class="wf-badge wf-pending">4</div>
+                <div class="wf-label">Executed</div>
+                <div class="wf-sub">Active Contract</div>
+            </div>
+            <div style="color:#475569; font-weight:bold;">➔</div>
+            <div class="wf-step">
+                <div class="wf-badge wf-pending">5</div>
+                <div class="wf-label">Closed</div>
+                <div class="wf-sub">Finalized</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    elif wf_type == "🏢 Vendor Onboarding & Audit Workflow":
+        st.markdown("#### Vendor Onboarding Lifecycle")
+        st.graphviz_chart("""
+        digraph {
+            graph [bgcolor="transparent", rankdir="LR", fontname="Inter"];
+            node [shape="rect", style="filled,rounded", fontname="Inter", fontsize=11, fontcolor="#ffffff"];
+            edge [fontname="Inter", fontsize=10, color="#64748b", fontcolor="#cbd5e1"];
+
+            app [label="1. Vendor Application\n(Submitted)", fillcolor="#1e3a8a", color="#2563eb"];
+            audit [label="2. Compliance & Safety Audit\n(Under Review)", fillcolor="#78350f", color="#d97706"];
+            approved [label="3. Approved Vendor List (AVL)\n(Active Vendor)", fillcolor="#064e3b", color="#059669"];
+            suspended [label="4. Temporarily Suspended\n(Audit Hold)", fillcolor="#7f1d1d", color="#dc2626"];
+
+            app -> audit [label="Verify Documents"];
+            audit -> approved [label="Audit Passed"];
+            audit -> app [label="Request Info"];
+            approved -> suspended [label="Safety Violation"];
+            suspended -> approved [label="Re-certified"];
+        }
+        """)
+
+    elif wf_type == "📑 Request for Information (RFI) Approval Pipeline":
+        st.markdown("#### RFI Workflow Pipeline")
+        st.graphviz_chart("""
+        digraph {
+            graph [bgcolor="transparent", rankdir="LR", fontname="Inter"];
+            node [shape="rect", style="filled,rounded", fontname="Inter", fontsize=11, fontcolor="#ffffff"];
+            edge [fontname="Inter", fontsize=10, color="#64748b", fontcolor="#cbd5e1"];
+
+            contractor [label="Contractor / Subcontractor\n(Submit RFI)", fillcolor="#1e293b", color="#3b82f6"];
+            pm [label="Project Manager\n(Triage & Assign)", fillcolor="#1e3a8a", color="#60a5fa"];
+            eng [label="Architect / Engineer\n(Technical Solution)", fillcolor="#581c87", color="#c084fc"];
+            closed [label="RFI Response Issued\n(Closed Record)", fillcolor="#064e3b", color="#34d399"];
+
+            contractor -> pm [label="Submit RFI"];
+            pm -> eng [label="Forward to Engineer"];
+            eng -> pm [label="Provide Technical Answer"];
+            pm -> contractor [label="Official Response Sent"];
+            pm -> closed [label="Mark Resolved"];
+        }
+        """)
+
+    elif wf_type == "👥 User Role & Access Authorization Workflow":
+        st.markdown("#### User Administration Authorization Pipeline")
+        st.graphviz_chart("""
+        digraph {
+            graph [bgcolor="transparent", rankdir="LR", fontname="Inter"];
+            node [shape="rect", style="filled,rounded", fontname="Inter", fontsize=11, fontcolor="#ffffff"];
+            edge [fontname="Inter", fontsize=10, color="#64748b", fontcolor="#cbd5e1"];
+
+            req [label="User Account Request\n(New User)", fillcolor="#1e293b", color="#94a3b8"];
+            auth [label="Identity Verification\n(SSO / IAM)", fillcolor="#1e3a8a", color="#3b82f6"];
+            permission [label="Group & Permission Mapping\n(Shell & BP Permission)", fillcolor="#581c87", color="#a855f7"];
+            active [label="Active Integration User\n(Status = 1)", fillcolor="#064e3b", color="#10b981"];
+
+            req -> auth [label="Submit Info"];
+            auth -> permission [label="IAM Validated"];
+            permission -> active [label="Grant Access"];
+        }
+        """)
+
+    # Dynamic Record Status Distribution Chart (Plotly)
+    st.markdown("---")
+    st.markdown("#### 📊 Dynamic Record Status Analytics")
+    
+    import plotly.express as px
+    # Sample status distribution chart based on session state or standard metrics
+    status_counts = {"Active / Approved": 14, "Pending Approval": 5, "In Review": 3, "Draft": 2, "Closed": 8}
+    
+    fig = px.pie(
+        names=list(status_counts.keys()),
+        values=list(status_counts.values()),
+        title="Business Process Status Distribution",
+        color_discrete_sequence=px.colors.qualitative.Pastel,
+        hole=0.4
+    )
+    fig.update_layout(
+        paper_bgcolor="#161e2e",
+        plot_bgcolor="#161e2e",
+        font_color="#e0e6ed",
+        margin=dict(l=20, r=20, t=40, b=20)
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+# ==========================================
+# TAB 8: API EXPLORER & REST TESTER
 # ==========================================
 with tab_explorer:
     st.subheader("⚡ API Explorer & REST Tester")
