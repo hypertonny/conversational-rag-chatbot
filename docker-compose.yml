@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  unifier-dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: unifier-dashboard
+    restart: always
+    ports:
+      - "8501:8501"
+    environment:
+      - UNIFIER_BEARER_TOKEN=${UNIFIER_BEARER_TOKEN:-}
+      - UNIFIER_BASE_URL=${UNIFIER_BASE_URL:-https://us2.unifier.oraclecloud.com/consulting/test/ws/rest/service/v1}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - LLM_PROVIDER=${LLM_PROVIDER:-groq}
+    volumes:
+      - chroma_data:/app/chroma_db
+
+volumes:
+  chroma_data:
+    driver: local
