@@ -343,6 +343,8 @@ with tab_overview:
     | Action / Resource | HTTP Method | Endpoint Path | Sample Body / Filter |
     | :--- | :--- | :--- | :--- |
     | **Active Projects List** | `GET` | `/admin/projectshell?Status=Active` | N/A (URL Query Param) |
+    | **Company BP Catalog** | `GET` | `/admin/bps` | Lists available BPs (`bp_model_name`, `bp_name`, `studio_source`) |
+    | **Project BP Catalog** | `GET` | `/admin/bps/{project_number}` | Lists BPs for project (e.g. `/admin/bps/001`) |
     | **Company BP Records** | `POST` | `/bp/records/` | `{"bpname": "Vendor", "lineitem": "yes"}` |
     | **Company Record Search** | `POST` | `/bp/records/` | `{"bpname": "Vendor", "filter_condition": "record_no=VEN-0000006"}` |
     | **Project BP Records** | `POST` | `/bp/records/{project_number}` | `{"bpname": "Contract", "lineitem": "yes"}` |
@@ -449,12 +451,46 @@ with tab_projects:
 # ==========================================
 with tab_company_bp:
     st.subheader("🏢 Company-Level Business Processes")
-    st.caption("Endpoint: POST `/bp/records/`")
+    st.caption("Endpoints: GET `/admin/bps` (Catalog) | POST `/bp/records/` (Records)")
 
+    # Section 1: Fetch Available Company BP Catalog
+    with st.expander("📋 Fetch & Select Available Company Business Processes (`GET /admin/bps`)", expanded=False):
+        if st.button("🚀 Load Company BP Catalog", key="btn_load_company_bp_catalog"):
+            if not st.session_state.bearer_token:
+                st.error("Please enter a Bearer Token in the sidebar.")
+            else:
+                with st.spinner("Fetching Company BP Catalog..."):
+                    success, data, status_code, elapsed_ms = client.get_company_bp_list()
+                    if success:
+                        st.success(f"Company BP Catalog loaded! (HTTP {status_code})")
+                        bp_list = data.get("data", data.get("bps", data))
+                        if isinstance(bp_list, list) and len(bp_list) > 0:
+                            st.session_state.company_bp_catalog_df = pd.DataFrame(bp_list)
+                            st.session_state.chatbot_engine.ingest_json_data(data, source_name="Company BP Catalog")
+                        else:
+                            st.json(data)
+                    else:
+                        st.error(f"Failed to fetch BP Catalog (HTTP {status_code}): {data}")
+
+        if "company_bp_catalog_df" in st.session_state and st.session_state.company_bp_catalog_df is not None:
+            cat_df = st.session_state.company_bp_catalog_df
+            st.dataframe(cat_df, use_container_width=True)
+            
+            # Allow picking from catalog
+            bp_name_col = [c for c in cat_df.columns if 'name' in c.lower() or 'model' in c.lower()]
+            choice_col = bp_name_col[0] if bp_name_col else cat_df.columns[0]
+            selected_catalog_bp = st.selectbox("Select BP Name from Catalog", cat_df[choice_col].dropna().unique())
+            if st.button("Use Selected BP Name"):
+                st.session_state.selected_company_bp_name = str(selected_catalog_bp)
+                st.success(f"Selected BP Name: `{selected_catalog_bp}`")
+
+    # Section 2: Form to Fetch BP Records
+    st.markdown("#### Query Business Process Records")
+    default_company_bp = st.session_state.get("selected_company_bp_name", "Vendor")
     with st.form("company_bp_form"):
         col_bp1, col_bp2 = st.columns(2)
         with col_bp1:
-            bp_name = st.text_input("Business Process Name (bpname)", value="Vendor", help="e.g. Vendor, Company BP, etc.")
+            bp_name = st.text_input("Business Process Name (bpname)", value=default_company_bp, help="e.g. Vendor, Company BP, etc.")
             filter_cond = st.text_input("Filter Condition (optional)", value="", help="e.g. record_no=VEN-0000006 or status='Active'")
         with col_bp2:
             st.markdown("**Include Details in Payload:**")
@@ -532,12 +568,46 @@ with tab_company_bp:
 # ==========================================
 with tab_project_bp:
     st.subheader("🏗️ Project / Shell-Level Business Processes")
-    st.caption("Endpoint: POST `/bp/records/{project_number}`")
+    st.caption("Endpoints: GET `/admin/bps/{project_number}` (Catalog) | POST `/bp/records/{project_number}` (Records)")
 
     # Display active project selection indicator
     if st.session_state.selected_project_no:
         st.info(f"Selected Project Number: `{st.session_state.selected_project_no}` (from Active Projects tab)")
 
+    # Section 1: Fetch Available Project BP Catalog
+    with st.expander("📋 Fetch & Select Project Business Process Catalog (`GET /admin/bps/{project_number}`)", expanded=False):
+        proj_no_cat = st.text_input("Project Number for Catalog", value=st.session_state.selected_project_no or "001", key="proj_cat_no")
+        if st.button("🚀 Load Project BP Catalog", key="btn_load_proj_bp_cat"):
+            if not st.session_state.bearer_token:
+                st.error("Please enter a Bearer Token in the sidebar.")
+            else:
+                with st.spinner(f"Fetching BP Catalog for Project '{proj_no_cat}'..."):
+                    success, data, status_code, elapsed_ms = client.get_project_bp_list(proj_no_cat)
+                    if success:
+                        st.success(f"Project BP Catalog loaded! (HTTP {status_code})")
+                        bp_list = data.get("data", data.get("bps", data))
+                        if isinstance(bp_list, list) and len(bp_list) > 0:
+                            st.session_state.project_bp_catalog_df = pd.DataFrame(bp_list)
+                            st.session_state.chatbot_engine.ingest_json_data(data, source_name=f"Project {proj_no_cat} BP Catalog")
+                        else:
+                            st.json(data)
+                    else:
+                        st.error(f"Failed to fetch Project BP Catalog (HTTP {status_code}): {data}")
+
+        if "project_bp_catalog_df" in st.session_state and st.session_state.project_bp_catalog_df is not None:
+            p_cat_df = st.session_state.project_bp_catalog_df
+            st.dataframe(p_cat_df, use_container_width=True)
+            
+            p_bp_name_col = [c for c in p_cat_df.columns if 'name' in c.lower() or 'model' in c.lower()]
+            p_choice_col = p_bp_name_col[0] if p_bp_name_col else p_cat_df.columns[0]
+            selected_p_catalog_bp = st.selectbox("Select Project BP Name from Catalog", p_cat_df[p_choice_col].dropna().unique())
+            if st.button("Use Selected Project BP Name"):
+                st.session_state.selected_project_bp_name = str(selected_p_catalog_bp)
+                st.success(f"Selected Project BP Name: `{selected_p_catalog_bp}`")
+
+    # Section 2: Form to Fetch Project BP Records
+    st.markdown("#### Query Project Business Process Records")
+    default_proj_bp = st.session_state.get("selected_project_bp_name", "Contract")
     with st.form("project_bp_form"):
         col_p1, col_p2 = st.columns(2)
         with col_p1:
@@ -546,7 +616,7 @@ with tab_project_bp:
                 value=st.session_state.selected_project_no or "001",
                 help="e.g. 001, PRJ-1001, etc."
             )
-            p_bp_name = st.text_input("Business Process Name (bpname)", value="Contract", help="e.g. Contract, Submittal, RFI, Change Order")
+            p_bp_name = st.text_input("Business Process Name (bpname)", value=default_proj_bp, help="e.g. Contract, Submittal, RFI, Change Order")
             p_filter_cond = st.text_input("Filter Condition (optional)", value="", help="e.g. record_no=CON-0000001")
         
         with col_p2:

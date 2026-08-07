@@ -58,6 +58,24 @@ class UnifierClient:
         url = f"{self.base_url}/admin/projectshell?Status=Active"
         return self._send_request("GET", url)
 
+    def get_company_bp_list(self) -> Tuple[bool, Union[Dict[str, Any], list, str], int, float]:
+        """
+        Fetch company-level Business Processes catalog / list.
+        GET /admin/bps
+        Returns list of available BPs with bp_model_name, bp_name, studio_source.
+        """
+        url = f"{self.base_url}/admin/bps"
+        return self._send_request("GET", url)
+
+    def get_project_bp_list(self, project_number: str) -> Tuple[bool, Union[Dict[str, Any], list, str], int, float]:
+        """
+        Fetch project/shell level Business Processes catalog / list.
+        GET /admin/bps/{project_number}
+        """
+        proj_clean = project_number.strip()
+        url = f"{self.base_url}/admin/bps/{proj_clean}"
+        return self._send_request("GET", url)
+
     def get_company_bp_records(
         self,
         bpname: str,
