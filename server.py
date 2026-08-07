@@ -1,7 +1,16 @@
 import os
 import json
+import time
+import logging
+import sqlite3
+import uuid
+from datetime import datetime
 from typing import Dict, Any, Optional, List
 from fastapi import FastAPI, HTTPException, Response, status
+
+# Configure server logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logger = logging.getLogger("FastAPI_Server")
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -15,6 +24,34 @@ app = FastAPI(
     description="High-performance custom web dashboard backend for Primavera Unifier REST v1 APIs and Conversational RAG AI.",
     version="2.0.0"
 )
+
+# --- DATABASE SETUP ---
+DB_PATH = "chats.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS conversations (
+            id TEXT PRIMARY KEY,
+            title TEXT,
+            updated_at TEXT
+        )
+    ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS messages (
+            id TEXT PRIMARY KEY,
+            conversation_id TEXT,
+            role TEXT,
+            content TEXT,
+            created_at TEXT,
+            FOREIGN KEY (conversation_id) REFERENCES conversations (id) ON DELETE CASCADE
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+init_db()
 
 # Enable CORS for local testing & Dokploy domain integration
 app.add_middleware(
@@ -100,6 +137,7 @@ class ChatReq(BaseModel):
     provider: Optional[str] = "groq"
     prompt: str
     chat_history: Optional[List[Dict[str, str]]] = []
+    conversation_id: Optional[str] = None
 
 
 # --- API ROUTES ---
@@ -195,8 +233,38 @@ def custom_request(req: CustomRequestReq):
         "headers": resp_headers
     }
 
+@app.get("/api/conversations")
+def list_conversations():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('SELECT id, title, updated_at FROM conversations ORDER BY updated_at DESC')
+    rows = c.fetchall()
+    conn.close()
+    return [{"id": r[0], "title": r[1], "updated_at": r[2]} for r in rows]
+
+@app.get("/api/conversations/{conv_id}")
+def get_conversation(conv_id: str):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY created_at ASC', (conv_id,))
+    rows = c.fetchall()
+    conn.close()
+    return [{"role": r[0], "content": r[1]} for r in rows]
+
+@app.delete("/api/conversations/{conv_id}")
+def delete_conversation(conv_id: str):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('DELETE FROM messages WHERE conversation_id = ?', (conv_id,))
+    c.execute('DELETE FROM conversations WHERE id = ?', (conv_id,))
+    conn.commit()
+    conn.close()
+    return {"success": True}
+
 @app.post("/api/chat")
 def chat(req: ChatReq):
+    logger.info(f"Received chat request (provider: {req.provider}). Prompt length: {len(req.prompt)}")
+    start_t = time.time()
     try:
         engine = get_engine(openai_key=req.openai_api_key or None, groq_key=req.groq_api_key or None)
 
@@ -204,14 +272,44 @@ def chat(req: ChatReq):
         if req.bearer_token and req.bearer_token.strip():
             client = UnifierClient(bearer_token=req.bearer_token.strip(), base_url=req.base_url or None)
 
+        # Database logic for conversation
+        conv_id = req.conversation_id
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+
+        if not conv_id:
+            conv_id = str(uuid.uuid4())
+            title = req.prompt[:30] + "..." if len(req.prompt) > 30 else req.prompt
+            now = datetime.utcnow().isoformat()
+            c.execute('INSERT INTO conversations (id, title, updated_at) VALUES (?, ?, ?)', (conv_id, title, now))
+        else:
+            now = datetime.utcnow().isoformat()
+            c.execute('UPDATE conversations SET updated_at = ? WHERE id = ?', (now, conv_id))
+
+        # Save user message
+        c.execute('INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)', 
+                  (str(uuid.uuid4()), conv_id, "user", req.prompt, datetime.utcnow().isoformat()))
+        conn.commit()
+
         answer = engine.get_chat_response(
             user_query=req.prompt,
             chat_history=req.chat_history or [],
             provider=req.provider or "groq",
             client=client
         )
-        return {"answer": answer}
+
+        # Save assistant message
+        c.execute('INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)', 
+                  (str(uuid.uuid4()), conv_id, "assistant", answer, datetime.utcnow().isoformat()))
+        conn.commit()
+        conn.close()
+
+        elapsed = time.time() - start_t
+        logger.info(f"Chat request successfully completed in {elapsed:.2f}s")
+        return {"answer": answer, "conversation_id": conv_id}
     except Exception as e:
+        elapsed = time.time() - start_t
+        logger.error(f"Chat request failed after {elapsed:.2f}s with error: {e}")
         # Always return valid JSON — never let a 500 reach the frontend
         return {"answer": f"Server error: {str(e)}"}
 

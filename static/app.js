@@ -413,32 +413,93 @@ document.addEventListener("DOMContentLoaded", () => {
         `;
     });
 
-    // --- FLOATING AI CHATBOT LOGIC ---
-    const btnToggleChat = document.getElementById("btnToggleChat");
-    const chatWindow = document.getElementById("chatWindow");
-    const btnCloseChat = document.getElementById("btnCloseChat");
-    const chatMessages = document.getElementById("chatMessages");
-    const chatInput = document.getElementById("chatInput");
-    const btnSendChat = document.getElementById("btnSendChat");
+    // --- FULL PAGE AI CHAT LOGIC (ChatGPT Style) ---
+    const chatMessagesFull = document.getElementById("chatMessagesFull");
+    const chatInputFull = document.getElementById("chatInputFull");
+    const btnSendChatFull = document.getElementById("btnSendChatFull");
+    const chatHistoryList = document.getElementById("chatHistoryList");
+    const btnNewChatFull = document.getElementById("btnNewChatFull");
+    const chatTitleDisplay = document.getElementById("chatTitleDisplay");
 
-    btnToggleChat.addEventListener("click", () => {
-        chatWindow.style.display = chatWindow.style.display === "none" ? "flex" : "none";
-    });
+    let currentConversationId = null;
+    let chatHistory = []; // local cache for current session
 
-    btnCloseChat.addEventListener("click", () => {
-        chatWindow.style.display = "none";
-    });
+    async function loadConversations() {
+        try {
+            const res = await fetch("/api/conversations");
+            const convos = await res.json();
+            chatHistoryList.innerHTML = "";
+            convos.forEach(c => {
+                const div = document.createElement("div");
+                div.className = `history-item ${c.id === currentConversationId ? 'active' : ''}`;
+                div.innerHTML = `<i class="fa-regular fa-message"></i> ${c.title || "New Chat"}`;
+                div.onclick = () => loadConversation(c.id, c.title);
+                
+                // Add delete button (hover effect handled via css or simple icon)
+                const delBtn = document.createElement("i");
+                delBtn.className = "fa-solid fa-trash";
+                delBtn.style.marginLeft = "auto";
+                delBtn.style.opacity = "0.5";
+                delBtn.onclick = async (e) => {
+                    e.stopPropagation();
+                    if(confirm("Delete this chat?")) {
+                        await fetch(`/api/conversations/${c.id}`, { method: "DELETE" });
+                        if(currentConversationId === c.id) {
+                            startNewChat();
+                        } else {
+                            loadConversations();
+                        }
+                    }
+                };
+                div.appendChild(delBtn);
+                chatHistoryList.appendChild(div);
+            });
+        } catch (e) {
+            console.error("Failed to load conversations", e);
+        }
+    }
 
-    async function sendChatMessage() {
-        const text = chatInput.value.trim();
+    async function loadConversation(id, title) {
+        currentConversationId = id;
+        chatTitleDisplay.innerText = title || "AI Chat";
+        chatMessagesFull.innerHTML = '<div class="message assistant"><div class="message-content"><i class="fa-solid fa-spinner fa-spin"></i> Loading...</div></div>';
+        
+        try {
+            const res = await fetch(`/api/conversations/${id}`);
+            const msgs = await res.json();
+            chatMessagesFull.innerHTML = "";
+            chatHistory = [];
+            msgs.forEach(m => {
+                appendMessage(m.role, m.content);
+                chatHistory.push(m);
+            });
+            loadConversations(); // refresh active state
+        } catch (e) {
+            chatMessagesFull.innerHTML = `<div class="message assistant"><div class="message-content">Failed to load chat.</div></div>`;
+        }
+    }
+
+    function startNewChat() {
+        currentConversationId = null;
+        chatHistory = [];
+        chatTitleDisplay.innerText = "New Chat";
+        chatMessagesFull.innerHTML = `
+            <div class="message assistant">
+                <div class="message-content">Hello! I am your Primavera Unifier AI Assistant. How can I help you today?</div>
+            </div>`;
+        loadConversations();
+    }
+
+    btnNewChatFull.addEventListener("click", startNewChat);
+
+    async function sendChatMessageFull() {
+        const text = chatInputFull.value.trim();
         if (!text) return;
 
-        // Append user message
         appendMessage("user", text);
         chatHistory.push({ role: "user", content: text });
-        chatInput.value = "";
+        chatInputFull.value = "";
 
-        // Placeholder for AI thinking
         const thinkingId = appendMessage("assistant", '<i class="fa-solid fa-spinner fa-spin"></i> Thinking...');
 
         try {
@@ -452,27 +513,34 @@ document.addEventListener("DOMContentLoaded", () => {
                     groq_api_key: groqApiKey.value.trim(),
                     provider: llmProvider.value,
                     prompt: text,
-                    chat_history: chatHistory
+                    chat_history: chatHistory,
+                    conversation_id: currentConversationId
                 })
             });
             const data = await res.json();
             const answer = data.answer || "No response received.";
+            
+            // If it's a new chat, the server returns the new ID
+            if (data.conversation_id && !currentConversationId) {
+                currentConversationId = data.conversation_id;
+            }
+            
             chatHistory.push({ role: "assistant", content: answer });
 
-            // Update thinking placeholder with rendered markdown
             const msgEl = document.getElementById(thinkingId);
             if (msgEl) {
                 msgEl.innerHTML = marked.parse(answer);
             }
+            loadConversations(); // refresh list to show updated titles/sorting
         } catch (err) {
             const msgEl = document.getElementById(thinkingId);
             if (msgEl) msgEl.innerText = `Error: ${err.message}`;
         }
     }
 
-    btnSendChat.addEventListener("click", sendChatMessage);
-    chatInput.addEventListener("keypress", (e) => {
-        if (e.key === "Enter") sendChatMessage();
+    btnSendChatFull.addEventListener("click", sendChatMessageFull);
+    chatInputFull.addEventListener("keypress", (e) => {
+        if (e.key === "Enter") sendChatMessageFull();
     });
 
     function appendMessage(role, content) {
@@ -480,8 +548,11 @@ document.addEventListener("DOMContentLoaded", () => {
         const div = document.createElement("div");
         div.className = `message ${role}`;
         div.innerHTML = `<div id="${id}" class="message-content">${role === 'user' ? content : marked.parse(content)}</div>`;
-        chatMessages.appendChild(div);
-        chatMessages.scrollTop = chatMessages.scrollHeight;
+        chatMessagesFull.appendChild(div);
+        chatMessagesFull.scrollTop = chatMessagesFull.scrollHeight;
         return id;
     }
+
+    // Initial load
+    loadConversations();
 });

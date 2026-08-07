@@ -107,6 +107,7 @@
                 <button class="tab-btn" data-tab="tabAttachments"><i class="fa-solid fa-paperclip"></i> Attachments</button>
                 <button class="tab-btn" data-tab="tabUsers"><i class="fa-solid fa-users"></i> User Admin</button>
                 <button class="tab-btn" data-tab="tabExplorer"><i class="fa-solid fa-bolt"></i> API Explorer</button>
+                <button class="tab-btn" data-tab="tabAIChat" style="background-color: var(--accent-blue); color: #fff;"><i class="fa-solid fa-robot"></i> AI Chat</button>
             </div>
 
             <!-- TAB 1: OVERVIEW -->
@@ -370,37 +371,39 @@
                     <div id="explorerResult" class="result-area margin-top"></div>
                 </div>
             </div>
+            <!-- TAB 8: AI CHAT (ChatGPT Style) -->
+            <div id="tabAIChat" class="tab-content" style="height: calc(100vh - 180px); padding: 0;">
+                <div class="chatgpt-layout">
+                    <!-- Sidebar for history -->
+                    <div class="chatgpt-sidebar">
+                        <button id="btnNewChatFull" class="btn btn-primary" style="width: 100%; margin-bottom: 15px;"><i class="fa-solid fa-plus"></i> New Chat</button>
+                        <div class="history-title">Recent Chats</div>
+                        <div id="chatHistoryList" class="chat-history-list">
+                            <!-- Populated by JS -->
+                        </div>
+                    </div>
+                    <!-- Main Chat Area -->
+                    <div class="chatgpt-main">
+                        <div class="chat-header-title" style="padding: 15px 20px; border-bottom: 1px solid var(--border-color); background: var(--bg-card);">
+                            <i class="fa-solid fa-robot"></i>
+                            <span id="chatTitleDisplay">Primavera Unifier AI Assistant</span>
+                        </div>
+                        <div id="chatMessagesFull" class="chat-messages" style="flex: 1; padding: 20px; overflow-y: auto;">
+                            <div class="message assistant">
+                                <div class="message-content">Hello! I am your Primavera Unifier AI Assistant. How can I help you today?</div>
+                            </div>
+                        </div>
+                        <div class="chat-input-area" style="padding: 20px; background: transparent; border: none;">
+                            <div class="input-wrapper" style="display: flex; gap: 10px; max-width: 800px; margin: 0 auto; width: 100%; position: relative;">
+                                <input type="text" id="chatInputFull" placeholder="Ask anything about your Unifier data..." autocomplete="off" style="width: 100%; padding: 15px 20px; border-radius: 25px; background: var(--bg-card); border: 1px solid var(--border-color); color: #fff; font-size: 15px;">
+                                <button id="btnSendChatFull" class="btn-send" style="position: absolute; right: 8px; top: 8px; width: 36px; height: 36px; border-radius: 50%;"><i class="fa-solid fa-paper-plane"></i></button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
 
         </main>
-    </div>
-
-    <!-- FLOATING CHATBOT WIDGET -->
-    <div class="chatbot-wrapper">
-        <button id="btnToggleChat" class="chatbot-trigger-btn">
-            <i class="fa-solid fa-comments"></i>
-            <span>AI Chatbot</span>
-        </button>
-
-        <div id="chatWindow" class="chat-window" style="display: none;">
-            <div class="chat-header">
-                <div class="chat-header-title">
-                    <i class="fa-solid fa-robot"></i>
-                    <span>Primavera Unifier AI Assistant</span>
-                </div>
-                <button id="btnCloseChat" class="chat-close-btn">&times;</button>
-            </div>
-
-            <div id="chatMessages" class="chat-messages">
-                <div class="message assistant">
-                    <div class="message-content">Hello! I am your Primavera Unifier AI Assistant. How can I help you today?</div>
-                </div>
-            </div>
-
-            <div class="chat-input-area">
-                <input type="text" id="chatInput" placeholder="Ask anything about your Unifier data..." autocomplete="off">
-                <button id="btnSendChat" class="btn-send"><i class="fa-solid fa-paper-plane"></i></button>
-            </div>
-        </div>
     </div>
 
     <!-- Custom App JS -->
