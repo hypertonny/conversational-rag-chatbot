@@ -110,6 +110,20 @@ def health_check():
 def test_connection(req: TestConnectionReq):
     client = UnifierClient(bearer_token=req.bearer_token, base_url=req.base_url)
     success, msg, code = client.test_connection()
+    if success:
+        # Pre-populate Vector DB with Active Projects & Company BP catalog automatically
+        try:
+            p_success, p_data, _, _ = client.get_active_projects()
+            if p_success:
+                engine = get_engine()
+                engine.ingest_json_data(p_data, source_name="Active Projects List")
+            
+            c_success, c_data, _, _ = client.get_company_bp_list()
+            if c_success:
+                engine = get_engine()
+                engine.ingest_json_data(c_data, source_name="Company BP Catalog")
+        except Exception:
+            pass
     return {"success": success, "message": msg, "status_code": code}
 
 @app.post("/api/active-projects")
