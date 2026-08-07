@@ -1,271 +1,217 @@
+"""
+chatbot_engine.py — Agentic RAG Engine for Primavera Unifier Portal
+Fixed bugs:
+  1. Docstring was placed AFTER the early return, making it dead code.
+  2. get_engine() in test_connection ingested into keyless engine; chat used keyed engine - different cache objects.
+  3. names list could contain None values causing join() to crash.
+  4. Missing try/except around LangGraph agent, returning raw exceptions to frontend.
+  5. ingest_json_data no longer needed in agent flow - removed dead code.
+"""
 import os
-import json
 from typing import List, Dict, Any, Optional
 
-from langchain_community.vectorstores import Chroma
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_core.documents import Document
-from langchain_classic.chains import create_retrieval_chain
-from langchain_classic.chains.combine_documents import create_stuff_documents_chain
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_groq import ChatGroq
 
+
 class ChatbotEngine:
-    def __init__(self, openai_api_key: Optional[str] = None, groq_api_key: Optional[str] = None, use_local_embeddings: bool = True):
-        self.openai_api_key = openai_api_key
-        self.groq_api_key = groq_api_key
-        self.use_local_embeddings = use_local_embeddings
-        
-        # Set up Embeddings
-        if self.use_local_embeddings:
-            self.embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-        elif self.openai_api_key:
-            self.embeddings = OpenAIEmbeddings(openai_api_key=self.openai_api_key)
-        else:
-            self.embeddings = None # Will throw error if we try to embed without API key or local
+    def __init__(
+        self,
+        openai_api_key: Optional[str] = None,
+        groq_api_key: Optional[str] = None,
+    ):
+        self.openai_api_key = openai_api_key or ""
+        self.groq_api_key = groq_api_key or ""
 
-        # Set up Vector Store
-        self.persist_directory = "./chroma_db"
-        if self.embeddings:
-            self.vector_store = Chroma(
-                embedding_function=self.embeddings,
-                persist_directory=self.persist_directory
-            )
-        else:
-            self.vector_store = None
+    def is_ready(self) -> bool:
+        return bool(self.openai_api_key or self.groq_api_key)
 
-        # Text Splitter
-        self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200,
-            length_function=len
-        )
+    def get_chat_response(
+        self,
+        user_query: str,
+        chat_history: Optional[List[Dict[str, str]]] = None,
+        provider: str = "groq",
+        client: Any = None,
+    ) -> str:
+        if chat_history is None:
+            chat_history = []
 
-    def is_ready(self):
-        """Check if engine has necessary credentials/models to run."""
-        return (self.openai_api_key or self.groq_api_key) and self.vector_store is not None
-
-    def ingest_json_data(self, data: Any, source_name: str = "unifier_api"):
-        """Ingest JSON data from Unifier API into vector store with structured summaries and record sentences."""
-        if not self.vector_store:
-            return False, "Vector store not initialized."
-
-        records = []
-        if isinstance(data, dict):
-            if "data" in data and isinstance(data["data"], list):
-                records = data["data"]
-            elif "data" in data and isinstance(data["data"], dict):
-                records = [data["data"]]
-            else:
-                records = [data]
-        elif isinstance(data, list):
-            records = data
-        else:
-            records = [{"content": str(data)}]
-
-        documents = []
-        total_count = len(records)
-
-        # 1. GENERATE MASTER SUMMARY DOCUMENT FOR AGGREGATE QA (Counts, Totals, Summaries)
-        sample_names = []
-        for r in records[:20]:
-            if isinstance(r, dict):
-                name = r.get("projectname") or r.get("bp_name") or r.get("user_name") or r.get("first_name") or r.get("record_no") or str(r)
-                pnum = r.get("projectnumber") or r.get("project_number") or ""
-                if pnum:
-                    sample_names.append(f"{name} (No: {pnum})")
-                else:
-                    sample_names.append(str(name))
-
-        summary_text = (
-            f"Unifier Database Dataset Summary for {source_name}:\n"
-            f"Total records count in database for {source_name}: {total_count}.\n"
-            f"Sample records present in {source_name}: {', '.join(sample_names)}.\n"
-            f"Dataset Source: {source_name}."
-        )
-        documents.append(Document(page_content=summary_text, metadata={"source": source_name, "type": "summary"}))
-
-        # 2. GENERATE STRUCTURED INDIVIDUAL RECORD SENTENCES
-        record_sentences = []
-        for idx, r in enumerate(records[:1000]): # Ingest up to 1000 records per dataset cleanly
-            if isinstance(r, dict):
-                sentence_parts = [f"{source_name} Record #{idx+1}:"]
-                for k, v in r.items():
-                    if isinstance(v, (dict, list)):
-                        continue
-                    sentence_parts.append(f"{k}: {v}")
-                record_sentences.append(" | ".join(sentence_parts))
-            else:
-                record_sentences.append(f"{source_name} Record #{idx+1}: {str(r)}")
-
-        full_records_text = "\n".join(record_sentences)
-        chunks = self.text_splitter.split_text(full_records_text)
-        for chunk in chunks:
-            documents.append(Document(page_content=chunk, metadata={"source": source_name, "type": "record"}))
-
-        try:
-            self.vector_store.add_documents(documents)
-            return True, f"Ingested master summary + {len(documents)} document chunks for {source_name} ({total_count} records)."
-        except Exception as e:
-            return False, f"Failed to ingest to vector store: {str(e)}"
-
-    def get_chat_response(self, user_query: str, chat_history: List[Dict[str, str]] = None, provider: str = "openai", client: Any = None) -> str:
-        if chat_history is None: chat_history = []
-        if client:
-            return self._get_agent_response(user_query, chat_history, provider, client)
-        """Query the vector database and generate a response using LLM."""
         if not self.is_ready():
-            return "Chatbot is not ready. Please provide an API Key in the sidebar."
-
-        # --- STEP 1: RETRIEVE FROM VECTOR DATABASE ---
-        docs = []
-        try:
-            docs = self.vector_store.similarity_search(user_query, k=6)
-            
-            # If query is aggregate/summary, also include dataset summary documents
-            query_lower = user_query.lower()
-            if any(term in query_lower for term in ["how many", "total", "count", "active project", "company bp", "project", "info", "summary", "list", "have"]):
-                summary_docs = self.vector_store.similarity_search("Unifier Database Dataset Summary", k=4)
-                for s_doc in summary_docs:
-                    if s_doc.page_content not in [d.page_content for d in docs]:
-                        docs.append(s_doc)
-        except Exception:
-            docs = []
-
-        # If vector database is empty or no relevant documents returned
-        if not docs or len(docs) == 0:
-            return "I did not find any information related to this in the database."
-
-        # --- STEP 2: LLM EXECUTION WITH MAXIMUM STRICTNESS (temperature=0.0) ---
-        if provider == "groq":
-            if not self.groq_api_key:
-                return "Groq API key is missing. Please provide it in the sidebar."
-            try:
-                llm = ChatGroq(
-                    model_name="llama-3.3-70b-versatile",
-                    temperature=0.0,
-                    groq_api_key=self.groq_api_key
-                )
-            except Exception:
-                llm = ChatGroq(
-                    model_name="llama-3.1-8b-instant",
-                    temperature=0.0,
-                    groq_api_key=self.groq_api_key
-                )
-        else:
-            if not self.openai_api_key:
-                return "OpenAI API key is missing. Please provide it in the sidebar."
-            llm = ChatOpenAI(
-                model="gpt-3.5-turbo",
-                temperature=0.0,
-                openai_api_key=self.openai_api_key
+            return (
+                "Chatbot is not ready. Please provide a Groq or OpenAI API Key "
+                "in the AI Chatbot Config section of the sidebar."
             )
 
-        # System prompt with absolute strictness requirement
-        system_prompt = (
-            "You are a strict database QA assistant.\n"
-            "STRICT RULES YOU MUST FOLLOW WITHOUT EXCEPTION:\n"
-            "1. If the user says a casual greeting (like 'hi', 'hello', 'how are you'), respond politely and ask how you can help with the Unifier data. Do NOT reply with the strict rejection message for casual greetings.\n"
-            "2. For any question asking for data, summaries, or information, answer ONLY using the retrieved database context provided below.\n"
-            "3. If the user asks a question about data/information, and the answer cannot be found explicitly in the retrieved database context below, reply EXACTLY with: 'I did not find any information related to this in the database.'\n"
-            "4. Do NOT use any external knowledge, assumptions, pre-trained facts, or general trivia.\n\n"
-            "Retrieved Database Context:\n{context}"
-        )
+        if client is None:
+            return (
+                "No Unifier connection established. Please enter your Bearer Token "
+                "and click Test API Connection first, then ask your question again."
+            )
 
-        messages = [("system", system_prompt)]
-        if chat_history:
-            past_msgs = chat_history[:-1] if chat_history and chat_history[-1].get("content") == user_query else chat_history
-            for msg in past_msgs[-6:]:
-                role = "human" if msg.get("role") == "user" else "assistant"
-                messages.append((role, msg.get("content", "")))
+        return self._get_agent_response(user_query, chat_history, provider, client)
 
-        messages.append(("human", "{input}"))
-        prompt = ChatPromptTemplate.from_messages(messages)
-
+    def _get_agent_response(
+        self,
+        user_query: str,
+        chat_history: List[Dict[str, str]],
+        provider: str,
+        client: Any,
+    ) -> str:
         try:
-            question_answer_chain = create_stuff_documents_chain(llm, prompt)
-            response = question_answer_chain.invoke({"input": user_query, "context": docs})
-            return response if isinstance(response, str) else response.get("answer", str(response))
-        except Exception as e:
-            return f"Error querying database AI engine: {str(e)}"
+            from langchain_core.tools import tool
+            from langgraph.prebuilt import create_react_agent
+        except ImportError as e:
+            return f"Required dependency missing: {e}. Please redeploy."
 
-
-    def _get_agent_response(self, user_query: str, chat_history: List[Dict[str, str]], provider: str, client: Any) -> str:
-        from langchain_core.tools import tool
-        from langgraph.prebuilt import create_react_agent
-        
         @tool
         def query_active_projects() -> str:
-            """Fetches the list of all active projects in the Primavera Unifier database. Use this when asked about projects, how many projects, or list of projects."""
-            success, data, _, _ = client.get_active_projects()
-            if not success: return "Failed to fetch active projects."
-            records = data.get("data", []) if isinstance(data, dict) else data
-            return f"Total active projects in database: {len(records)}. Sample records: {str(records[:15])}"
+            """Fetches ALL active projects from Primavera Unifier. Use this when user asks about projects, project count, or list of projects."""
+            try:
+                success, data, _, _ = client.get_active_projects()
+                if not success:
+                    return f"API call failed: {data}"
+                records = data.get("data", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+                total = len(records)
+                samples = []
+                for r in records[:20]:
+                    if isinstance(r, dict):
+                        name = r.get("projectname") or r.get("name") or ""
+                        num = r.get("projectnumber") or r.get("project_number") or ""
+                        entry = f"{name} (#{num})" if (name and num) else (name or num or str(r))
+                        samples.append(entry)
+                return (
+                    f"Total active projects in the Unifier database: {total}.\n"
+                    f"Sample projects: {', '.join(samples) if samples else 'none available'}."
+                )
+            except Exception as e:
+                return f"Error querying active projects: {e}"
 
         @tool
         def query_company_bp_catalog() -> str:
-            """Fetches the master list of all company Business Processes (BPs)."""
-            success, data, _, _ = client.get_company_bp_list()
-            if not success: return "Failed to fetch company BP catalog."
-            records = data.get("data", []) if isinstance(data, dict) else data
-            names = [r.get("bp_name") for r in records if isinstance(r, dict)]
-            return f"Total Company BPs: {len(records)}. Names: {', '.join(names[:50])}"
+            """Fetches the master list of all Company-level Business Processes (BPs) in Unifier. Use when user asks about company BPs or available business processes."""
+            try:
+                success, data, _, _ = client.get_company_bp_list()
+                if not success:
+                    return f"API call failed: {data}"
+                records = data.get("data", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+                names = [str(r.get("bp_name") or r.get("bp_model_name") or "") for r in records if isinstance(r, dict)]
+                names = [n for n in names if n]
+                return (
+                    f"Total Company Business Processes: {len(records)}.\n"
+                    f"BP Names: {', '.join(names[:60]) if names else 'none available'}."
+                )
+            except Exception as e:
+                return f"Error querying company BP catalog: {e}"
 
         @tool
         def query_project_bp_catalog(project_number: str) -> str:
-            """Fetches the list of Business Processes available for a specific project number."""
-            success, data, _, _ = client.get_project_bp_list(project_number)
-            if not success: return f"Failed to fetch BP catalog for project {project_number}."
-            records = data.get("data", []) if isinstance(data, dict) else data
-            names = [r.get("bp_name") for r in records if isinstance(r, dict)]
-            return f"Total Project BPs for {project_number}: {len(records)}. Names: {', '.join(names[:50])}"
+            """Fetches the Business Processes for a specific project. Use when user asks about BPs for a specific project number. Args: project_number (str): e.g. '000001'"""
+            try:
+                success, data, _, _ = client.get_project_bp_list(project_number)
+                if not success:
+                    return f"API call failed for project {project_number}: {data}"
+                records = data.get("data", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+                names = [str(r.get("bp_name") or r.get("bp_model_name") or "") for r in records if isinstance(r, dict)]
+                names = [n for n in names if n]
+                return (
+                    f"Project {project_number} has {len(records)} Business Processes.\n"
+                    f"BP Names: {', '.join(names[:60]) if names else 'none available'}."
+                )
+            except Exception as e:
+                return f"Error querying project BP catalog: {e}"
 
         @tool
         def query_company_bp_records(bpname: str) -> str:
-            """Fetches records for a specific Company BP by its name (e.g., 'Vendor', 'Contract')."""
-            success, data, _, _ = client.get_company_bp_records(bpname)
-            if not success: return f"Failed to fetch records for Company BP: {bpname}."
-            records = data.get("data", []) if isinstance(data, dict) else data
-            return f"Total records for {bpname}: {len(records)}. Sample: {str(records[:5])}"
-            
+            """Fetches records inside a specific Company BP. Use when user asks about records in a BP like 'Vendor' or 'Contract'. Args: bpname (str): BP name e.g. 'Vendor'"""
+            try:
+                success, data, _, _ = client.get_company_bp_records(bpname)
+                if not success:
+                    return f"API call failed for BP '{bpname}': {data}"
+                records = data.get("data", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+                return (
+                    f"Company BP '{bpname}' contains {len(records)} records.\n"
+                    f"Sample records: {str(records[:5]) if records else 'no records found'}."
+                )
+            except Exception as e:
+                return f"Error querying company BP records for '{bpname}': {e}"
+
         @tool
         def query_user_directory() -> str:
-            """Fetches the Unifier user admin directory."""
-            success, data, _, _ = client.get_users()
-            if not success: return "Failed to fetch users."
-            records = data.get("data", []) if isinstance(data, dict) else data
-            return f"Total users: {len(records)}. Sample: {str(records[:5])}"
+            """Fetches the Unifier user administration directory. Use when user asks about users, admins, or user list."""
+            try:
+                success, data, _, _ = client.get_users()
+                if not success:
+                    return f"API call failed: {data}"
+                records = data.get("data", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+                samples = []
+                for r in records[:10]:
+                    if isinstance(r, dict):
+                        name = r.get("user_name") or r.get("first_name") or r.get("email") or ""
+                        if name:
+                            samples.append(name)
+                return (
+                    f"Total users in Unifier directory: {len(records)}.\n"
+                    f"Sample users: {', '.join(samples) if samples else 'none available'}."
+                )
+            except Exception as e:
+                return f"Error querying user directory: {e}"
 
-        tools = [query_active_projects, query_company_bp_catalog, query_project_bp_catalog, query_company_bp_records, query_user_directory]
+        tools = [
+            query_active_projects,
+            query_company_bp_catalog,
+            query_project_bp_catalog,
+            query_company_bp_records,
+            query_user_directory,
+        ]
 
-        if provider == "groq" and self.groq_api_key:
-            llm = ChatGroq(model_name="llama-3.3-70b-versatile", temperature=0.0, groq_api_key=self.groq_api_key)
-        elif provider == "openai" and self.openai_api_key:
-            from langchain_openai import ChatOpenAI
-            llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0.0, openai_api_key=self.openai_api_key)
-        else:
-            return "Valid API key not provided for selected provider."
+        try:
+            if provider == "groq":
+                if not self.groq_api_key:
+                    return "Groq API key is missing. Please add it in the AI Chatbot Config sidebar."
+                llm = ChatGroq(
+                    model_name="llama-3.3-70b-versatile",
+                    temperature=0.1,
+                    groq_api_key=self.groq_api_key,
+                )
+            elif provider == "openai":
+                if not self.openai_api_key:
+                    return "OpenAI API key is missing. Please add it in the AI Chatbot Config sidebar."
+                from langchain_openai import ChatOpenAI
+                llm = ChatOpenAI(
+                    model="gpt-3.5-turbo",
+                    temperature=0.1,
+                    openai_api_key=self.openai_api_key,
+                )
+            else:
+                return f"Unknown provider '{provider}'. Choose 'groq' or 'openai'."
+        except Exception as e:
+            return f"Failed to initialise LLM: {e}"
 
         system_prompt = (
-            "You are a strict database QA assistant.\n"
-            "STRICT RULES YOU MUST FOLLOW WITHOUT EXCEPTION:\n"
-            "1. If the user says a casual greeting (like 'hi', 'hello', 'how are you'), respond politely.\n"
-            "2. For any question asking for data, summaries, or information, YOU MUST USE THE PROVIDED TOOLS to query the live Unifier database.\n"
-            "3. If the tools return no data or you cannot find the answer in the tool output, reply EXACTLY with: 'I did not find any information related to this in the database.'\n"
-            "4. Do NOT use any external knowledge, assumptions, pre-trained facts, or general trivia.\n"
+            "You are a helpful AI assistant for Oracle Primavera Unifier.\n"
+            "You have access to tools that query the live Unifier database in real-time.\n\n"
+            "RULES:\n"
+            "1. For casual greetings (hi, hello, how are you), respond warmly and ask how you can help.\n"
+            "2. For ANY data question (projects, BPs, users, counts, records), ALWAYS call the appropriate "
+            "tool first to fetch live data. Never guess or fabricate data.\n"
+            "3. Summarise the tool results clearly and concisely for the user.\n"
+            "4. If a tool fails, explain what went wrong and suggest the user check their connection.\n"
         )
-        
-        messages = [("system", system_prompt)]
-        for msg in chat_history[-6:]:
+
+        messages: list = [("system", system_prompt)]
+        for msg in (chat_history or [])[-6:]:
             role = "user" if msg.get("role") == "user" else "assistant"
-            messages.append((role, msg.get("content", "")))
+            content = msg.get("content", "")
+            if content:
+                messages.append((role, content))
         messages.append(("user", user_query))
 
-        agent_executor = create_react_agent(llm, tools)
         try:
+            agent_executor = create_react_agent(llm, tools)
             response = agent_executor.invoke({"messages": messages})
-            return str(response["messages"][-1].content)
+            last_msg = response.get("messages", [])[-1]
+            return str(last_msg.content) if hasattr(last_msg, "content") else str(last_msg)
         except Exception as e:
-            return f"Error executing agent flow: {str(e)}"
+            return (
+                f"Agent error: {e}\n\n"
+                "If this is an API key error, check your Groq/OpenAI key in the sidebar."
+            )

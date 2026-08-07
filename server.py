@@ -112,63 +112,26 @@ def health_check():
 def test_connection(req: TestConnectionReq):
     client = UnifierClient(bearer_token=req.bearer_token, base_url=req.base_url)
     success, msg, code = client.test_connection()
-    if success:
-        # Pre-populate Vector DB across ALL master endpoints automatically
-        try:
-            engine = get_engine()
-            # 1. Active Projects
-            p_success, p_data, _, _ = client.get_active_projects()
-            if p_success:
-                engine.ingest_json_data(p_data, source_name="Active Projects List")
-                # Parse project numbers to fetch project BP catalogs
-                if isinstance(p_data, dict) and "data" in p_data:
-                    proj_list = p_data.get("data", [])
-                    for proj in proj_list[:5]: # Pre-fetch catalogs for first 5 projects
-                        proj_no = proj.get("project_number") or proj.get("projectnumber")
-                        if proj_no:
-                            pb_success, pb_data, _, _ = client.get_project_bp_list(proj_no)
-                            if pb_success:
-                                engine.ingest_json_data(pb_data, source_name=f"Project {proj_no} BP Catalog")
-
-            # 2. Company BP Catalog
-            c_success, c_data, _, _ = client.get_company_bp_list()
-            if c_success:
-                engine.ingest_json_data(c_data, source_name="Company BP Catalog")
-
-            # 3. User Directory
-            u_success, u_data, _, _ = client.get_users()
-            if u_success:
-                engine.ingest_json_data(u_data, source_name="User Admin List")
-
-        except Exception:
-            pass
+    # Note: The chatbot now uses a live Agentic flow (LangGraph tools).
+    # Data is fetched on-demand per prompt — no pre-population needed.
     return {"success": success, "message": msg, "status_code": code}
 
 @app.post("/api/active-projects")
 def get_active_projects(req: TestConnectionReq):
     client = UnifierClient(bearer_token=req.bearer_token, base_url=req.base_url)
     success, data, status_code, elapsed_ms = client.get_active_projects()
-    if success:
-        engine = get_engine()
-        engine.ingest_json_data(data, source_name="Active Projects List")
     return {"success": success, "data": data, "status_code": status_code, "elapsed_ms": elapsed_ms}
 
 @app.post("/api/company-bp-catalog")
 def get_company_bp_catalog(req: CompanyBPCatalogReq):
     client = UnifierClient(bearer_token=req.bearer_token, base_url=req.base_url)
     success, data, status_code, elapsed_ms = client.get_company_bp_list()
-    if success:
-        engine = get_engine()
-        engine.ingest_json_data(data, source_name="Company BP Catalog")
     return {"success": success, "data": data, "status_code": status_code, "elapsed_ms": elapsed_ms}
 
 @app.post("/api/project-bp-catalog")
 def get_project_bp_catalog(req: ProjectBPCatalogReq):
     client = UnifierClient(bearer_token=req.bearer_token, base_url=req.base_url)
     success, data, status_code, elapsed_ms = client.get_project_bp_list(req.project_number)
-    if success:
-        engine = get_engine()
-        engine.ingest_json_data(data, source_name=f"Project {req.project_number} BP Catalog")
     return {"success": success, "data": data, "status_code": status_code, "elapsed_ms": elapsed_ms}
 
 @app.post("/api/company-bp-records")
@@ -182,9 +145,6 @@ def get_company_bp_records(req: CompanyBPRecordsReq):
         general_comments=req.general_comments or "no",
         attach_all_publications=req.attach_all_publications or "no"
     )
-    if success:
-        engine = get_engine()
-        engine.ingest_json_data(data, source_name=f"Company BP: {req.bpname}")
     return {"success": success, "data": data, "status_code": status_code, "elapsed_ms": elapsed_ms}
 
 @app.post("/api/project-bp-records")
@@ -199,9 +159,6 @@ def get_project_bp_records(req: ProjectBPRecordsReq):
         general_comments=req.general_comments or "no",
         attach_all_publications=req.attach_all_publications or "no"
     )
-    if success:
-        engine = get_engine()
-        engine.ingest_json_data(data, source_name=f"Project {req.project_number} BP: {req.bpname}")
     return {"success": success, "data": data, "status_code": status_code, "elapsed_ms": elapsed_ms}
 
 @app.post("/api/download-file")
@@ -219,9 +176,6 @@ def download_bp_file(req: FileDownloadReq):
 def get_users(req: UserAdminReq):
     client = UnifierClient(bearer_token=req.bearer_token, base_url=req.base_url)
     success, data, status_code, elapsed_ms = client.get_users(filter_condition=req.filter_condition or "")
-    if success:
-        engine = get_engine()
-        engine.ingest_json_data(data, source_name="User Admin List")
     return {"success": success, "data": data, "status_code": status_code, "elapsed_ms": elapsed_ms}
 
 @app.post("/api/custom-request")
@@ -243,19 +197,23 @@ def custom_request(req: CustomRequestReq):
 
 @app.post("/api/chat")
 def chat(req: ChatReq):
-    engine = get_engine(openai_key=req.openai_api_key, groq_key=req.groq_api_key)
+    try:
+        engine = get_engine(openai_key=req.openai_api_key or None, groq_key=req.groq_api_key or None)
 
-    client = None
-    if req.bearer_token:
-        client = UnifierClient(bearer_token=req.bearer_token, base_url=req.base_url)
+        client = None
+        if req.bearer_token and req.bearer_token.strip():
+            client = UnifierClient(bearer_token=req.bearer_token.strip(), base_url=req.base_url or None)
 
-    answer = engine.get_chat_response(
-        user_query=req.prompt,
-        chat_history=req.chat_history or [],
-        provider=req.provider or "groq",
-        client=client
-    )
-    return {"answer": answer}
+        answer = engine.get_chat_response(
+            user_query=req.prompt,
+            chat_history=req.chat_history or [],
+            provider=req.provider or "groq",
+            client=client
+        )
+        return {"answer": answer}
+    except Exception as e:
+        # Always return valid JSON — never let a 500 reach the frontend
+        return {"answer": f"Server error: {str(e)}"}
 
 # Environment Config Defaults for Frontend
 @app.get("/api/config")
