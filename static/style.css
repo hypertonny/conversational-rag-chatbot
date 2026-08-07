@@ -387,8 +387,8 @@ code, textarea.code-font {
 }
 
 .chat-window {
-    width: 380px;
-    height: 520px;
+    width: 550px;
+    height: 650px;
     background-color: #1e293b;
     border: 1px solid var(--accent-blue);
     border-radius: var(--radius-lg);
@@ -437,7 +437,7 @@ code, textarea.code-font {
 .message {
     display: flex;
     flex-direction: column;
-    max-width: 85%;
+    max-width: 95%;
 }
 
 .message.user { align-self: flex-end; }
@@ -506,7 +506,7 @@ code, textarea.code-font {
     width: 100%;
     border-collapse: collapse;
     margin: 12px 0;
-    font-size: 0.85rem;
+    font-size: 0.8rem;
     background: #0e1117;
     border-radius: var(--radius-md);
     overflow: hidden;
