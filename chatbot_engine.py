@@ -71,43 +71,18 @@ class ChatbotEngine:
         if not self.is_ready():
             return "Chatbot is not ready. Please provide an API Key in the sidebar."
 
-        query_lower = user_query.lower().strip()
-
-        # --- STEP 1: PYTHON-LEVEL DOMAIN RELEVANCE PRE-FILTER ---
-        unifier_keywords = [
-            "project", "projects", "unifier", "vendor", "vendors", "contract", "contracts",
-            "record", "records", "bp", "bps", "business process", "user", "users", "admin",
-            "file", "files", "attachment", "attachments", "shell", "shells", "rfi", "submittal",
-            "change order", "status", "active", "cost", "budget", "count", "how many", "list",
-            "show", "fetch", "query", "catalog", "schema", "uuu", "oracle"
-        ]
-        
-        is_unifier_query = any(kw in query_lower for kw in unifier_keywords)
-
-        # Non-Unifier general trivia check (e.g., PM of India, weather, general jokes)
-        general_trivia_indicators = [
-            "pm of", "prime minister", "president", "capital of", "weather", "who is", "tell me a joke",
-            "actor", "movie", "song", "sports", "cricket", "football", "recipe", "country"
-        ]
-        is_general_trivia = any(ind in query_lower for ind in general_trivia_indicators) and not is_unifier_query
-
-        if is_general_trivia:
-            return "I am a dedicated Oracle Primavera Unifier Database Assistant. I can only answer questions related to your fetched Unifier database records, projects, and business processes."
-
-        # --- STEP 2: SIMILARITY SEARCH CHECK ---
+        # --- STEP 1: RETRIEVE FROM VECTOR DATABASE ---
         docs = []
         try:
             docs = self.vector_store.similarity_search(user_query, k=5)
         except Exception:
             docs = []
 
+        # If vector database is empty or no relevant documents returned
         if not docs or len(docs) == 0:
-            if is_unifier_query:
-                return "No matching Unifier database records were found in loaded memory. Please use the dashboard tabs (e.g., Active Projects, Company BPs, User Admin) to fetch your data first."
-            else:
-                return "I am a dedicated Oracle Primavera Unifier Database Assistant. I can only answer questions related to your fetched Unifier database records, projects, and business processes."
+            return "I did not find any information related to this in the database."
 
-        # --- STEP 3: STRICT CONTEXT-ONLY LLM EXECUTION ---
+        # --- STEP 2: LLM EXECUTION WITH MAXIMUM STRICTNESS (temperature=0.0) ---
         if provider == "groq":
             if not self.groq_api_key:
                 return "Groq API key is missing. Please provide it in the sidebar."
@@ -132,16 +107,14 @@ class ChatbotEngine:
                 openai_api_key=self.openai_api_key
             )
 
-        # System prompt strictly forbidding external knowledge
+        # System prompt with absolute strictness requirement
         system_prompt = (
-            "You are a strict Oracle Primavera Unifier Database RAG assistant.\n"
-            "STRICT RULES:\n"
-            "1. Answer the user's question STRICTLY AND ONLY using the retrieved Unifier context provided below.\n"
-            "2. DO NOT use any outside knowledge, pre-trained world facts, or external trivia.\n"
-            "3. If the retrieved context does not contain the explicit answer to the user's question, reply EXACTLY with:\n"
-            "   'The loaded Unifier database context does not contain enough information to answer this question.'\n"
-            "4. Format your response cleanly using Markdown.\n\n"
-            "Retrieved Unifier Database Context:\n{context}"
+            "You are a strict database QA assistant.\n"
+            "STRICT RULES YOU MUST FOLLOW WITHOUT EXCEPTION:\n"
+            "1. Answer the user's question ONLY using the retrieved database context provided below.\n"
+            "2. If the answer to the user's question cannot be found explicitly in the retrieved database context below, reply EXACTLY with: 'I did not find any information related to this in the database.'\n"
+            "3. Do NOT use any external knowledge, assumptions, pre-trained facts, or general trivia.\n\n"
+            "Retrieved Database Context:\n{context}"
         )
 
         messages = [("system", system_prompt)]
