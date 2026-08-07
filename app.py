@@ -137,8 +137,15 @@ if "llm_provider" not in st.session_state:
 if "chatbot_messages" not in st.session_state:
     st.session_state.chatbot_messages = [{"role": "assistant", "content": "Hello! I am your Primavera Unifier AI Assistant. How can I help?"}]
 
+@st.cache_resource
+def get_cached_chatbot_engine(openai_key: str = "", groq_key: str = ""):
+    return ChatbotEngine(openai_api_key=openai_key if openai_key else None, groq_api_key=groq_key if groq_key else None)
+
 if "chatbot_engine" not in st.session_state:
-    st.session_state.chatbot_engine = ChatbotEngine()
+    st.session_state.chatbot_engine = get_cached_chatbot_engine(
+        st.session_state.openai_api_key,
+        st.session_state.groq_api_key
+    )
 
 
 # --- SIDEBAR ---
@@ -194,7 +201,7 @@ with st.sidebar:
         )
         if oai_key != st.session_state.openai_api_key:
             st.session_state.openai_api_key = oai_key
-            st.session_state.chatbot_engine = ChatbotEngine(openai_api_key=oai_key, groq_api_key=st.session_state.groq_api_key)
+            st.session_state.chatbot_engine = get_cached_chatbot_engine(oai_key, st.session_state.groq_api_key)
     else:
         groq_key = st.text_input(
             "Groq API Key (Optional)",
@@ -204,7 +211,7 @@ with st.sidebar:
         )
         if groq_key != st.session_state.groq_api_key:
             st.session_state.groq_api_key = groq_key
-            st.session_state.chatbot_engine = ChatbotEngine(openai_api_key=st.session_state.openai_api_key, groq_api_key=groq_key)
+            st.session_state.chatbot_engine = get_cached_chatbot_engine(st.session_state.openai_api_key, groq_key)
 
     st.markdown("---")
 

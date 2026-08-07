@@ -1,10 +1,13 @@
 # Use official lightweight Python image
 FROM python:3.12-slim
 
-# Set environment variables
+# Set environment variables for Python, Streamlit, and HuggingFace cache
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PORT=8501
+    PORT=8501 \
+    HF_HOME=/app/.cache/huggingface \
+    TRANSFORMERS_CACHE=/app/.cache/huggingface \
+    UV_CACHE_DIR=/root/.cache/uv
 
 # Set working directory
 WORKDIR /app
@@ -18,13 +21,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install uv for fast dependency resolution
 RUN pip install --no-cache-dir uv
 
-# Copy dependency files
+# Copy requirements FIRST to leverage Docker layer caching
 COPY requirements.txt .
 
-# Install Python packages
-RUN uv pip install --system -r requirements.txt
+# Install Python packages using BuildKit cache mounts for ultra-fast builds
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system -r requirements.txt
 
-# Copy application files
+# Pre-download SentenceTransformer embeddings model during build into cached layer
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+
+# Copy application source code (changes to app code won't invalidate dependency/model layers)
 COPY . .
 
 # Expose Streamlit port
