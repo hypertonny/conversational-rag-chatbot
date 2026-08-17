@@ -28,6 +28,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from unifier_client import UnifierClient
+from sync_manager import query_cached_projects, query_cached_users, query_cached_bp_records
 from chatbot_engine import ChatbotEngine
 
 app = FastAPI(
@@ -165,6 +166,9 @@ def test_connection(req: TestConnectionReq):
 
 @app.post("/api/active-projects")
 def get_active_projects(req: TestConnectionReq):
+    cached = query_cached_projects()
+    if cached:
+        return {"success": True, "data": cached, "status_code": 200, "elapsed_ms": 1.0}
     client = UnifierClient(bearer_token=req.bearer_token, base_url=req.base_url)
     success, data, status_code, elapsed_ms = client.get_active_projects()
     return {"success": success, "data": data, "status_code": status_code, "elapsed_ms": elapsed_ms}
@@ -183,6 +187,9 @@ def get_project_bp_catalog(req: ProjectBPCatalogReq):
 
 @app.post("/api/company-bp-records")
 def get_company_bp_records(req: CompanyBPRecordsReq):
+    cached = query_cached_bp_records(bpname=req.bpname)
+    if cached:
+        return {"success": True, "data": cached, "status_code": 200, "elapsed_ms": 1.0}
     client = UnifierClient(bearer_token=req.bearer_token, base_url=req.base_url)
     success, data, status_code, elapsed_ms = client.get_company_bp_records(
         bpname=req.bpname,
@@ -196,6 +203,9 @@ def get_company_bp_records(req: CompanyBPRecordsReq):
 
 @app.post("/api/project-bp-records")
 def get_project_bp_records(req: ProjectBPRecordsReq):
+    cached = query_cached_bp_records(project_number=req.project_number, bpname=req.bpname)
+    if cached:
+        return {"success": True, "data": cached, "status_code": 200, "elapsed_ms": 1.0}
     client = UnifierClient(bearer_token=req.bearer_token, base_url=req.base_url)
     success, data, status_code, elapsed_ms = client.get_project_bp_records(
         project_number=req.project_number,
@@ -221,6 +231,9 @@ def download_bp_file(req: FileDownloadReq):
 
 @app.post("/api/users")
 def get_users(req: UserAdminReq):
+    cached = query_cached_users(filter_val=req.filter_condition or "")
+    if cached:
+        return {"success": True, "data": cached, "status_code": 200, "elapsed_ms": 1.0}
     client = UnifierClient(bearer_token=req.bearer_token, base_url=req.base_url)
     success, data, status_code, elapsed_ms = client.get_users(filter_condition=req.filter_condition or "")
     return {"success": success, "data": data, "status_code": status_code, "elapsed_ms": elapsed_ms}
