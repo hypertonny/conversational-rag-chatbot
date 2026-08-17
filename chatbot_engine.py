@@ -727,8 +727,9 @@ class ChatbotEngine:
             if provider == "groq":
                 if not self.groq_api_key:
                     return "Groq API key is missing. Please add it in the AI Chatbot Config sidebar."
+                model_name = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
                 llm = ChatGroq(
-                    model_name="llama-3.3-70b-versatile",
+                    model_name=model_name,
                     temperature=0.1,
                     groq_api_key=self.groq_api_key,
                 )
