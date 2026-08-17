@@ -122,7 +122,8 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
         }
 
-        const keys = Object.keys(records[0]);
+        const displayRecords = records.slice(0, 200);
+        const keys = Object.keys(displayRecords[0]);
         const tableId = `table_${Date.now()}`;
         const searchId = `search_${Date.now()}`;
 
@@ -130,7 +131,7 @@ document.addEventListener("DOMContentLoaded", () => {
             <div class="card margin-top">
                 <div class="card-header">
                     <div>
-                        <h4>${title} (${records.length} Records)</h4>
+                        <h4>${title} (Showing ${displayRecords.length} of ${records.length} Records)</h4>
                     </div>
                     <div class="inline-inputs">
                         <input type="text" id="${searchId}" class="form-control inline-input" placeholder="🔍 Search records...">
@@ -143,7 +144,7 @@ document.addEventListener("DOMContentLoaded", () => {
                             <tr>${keys.map(k => `<th>${k}</th>`).join("")}</tr>
                         </thead>
                         <tbody>
-                            ${records.map(r => `<tr>${keys.map(k => `<td>${typeof r[k] === 'object' ? JSON.stringify(r[k]) : (r[k] !== undefined ? r[k] : '')}</td>`).join("")}</tr>`).join("")}
+                            ${displayRecords.map(r => `<tr>${keys.map(k => `<td>${typeof r[k] === 'object' ? JSON.stringify(r[k]) : (r[k] !== undefined ? r[k] : '')}</td>`).join("")}</tr>`).join("")}
                         </tbody>
                     </table>
                 </div>
