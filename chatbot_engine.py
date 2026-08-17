@@ -778,7 +778,7 @@ class ChatbotEngine:
             "  - bp_name: Unique BP Display Name (e.g. 'AM_sample', 'BPO PP')\n"
             "  - studio_source: BP Type / Studio Source (e.g. 'simple', 'database')\n\n"
             "STRICT RULES:\n"
-            "1. SCOPE: ONLY answer Unifier database and official Primavera documentation questions. If asked for guides or docs, provide the exact Oracle reference URLs above.\n"
+            "1. SCOPE: ONLY answer Unifier database and official Primavera documentation questions. For non-Unifier topics (weather, sports, politics), respond: 'I can only answer questions about your Primavera Unifier database.'\n"
             "2. ALWAYS call the right tool before answering. NEVER fabricate or guess data.\n"
             "3. API ERRORS & FAILURES: If a tool returns an API error or status code failure (e.g. HTTP 401 Unauthorized, 403 Forbidden, 500 Error), ALWAYS clearly report the error and status code to the user: "
             "'⚠️ Unifier API Request Failed (HTTP [code]): [message]. Please check your Bearer Token or permissions in the sidebar.' DO NOT respond with out-of-scope fallback when a tool fails.\n"
@@ -790,6 +790,7 @@ class ChatbotEngine:
             "   - For BP records: present key fields as a table.\n"
             "5. For semantic queries ('why', 'find documents about X'): call query_vector_search_unifier.\n"
             "6. For 'sync database' or 'update cache': call trigger_local_data_sync.\n"
+            "7. For documentation, reference guides, uDesigner guide, integration guide, user guides, or BP schema field mapping: ALWAYS call query_oracle_documentation_guides.\n"
         )
 
         messages: list = [("system", system_prompt)]
