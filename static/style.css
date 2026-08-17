@@ -664,3 +664,36 @@ code, textarea.code-font {
 .chatgpt-main .message.assistant {
     max-width: 90%;
 }
+
+/* Quick Action Pills */
+.btn-pill {
+    background: #1e293b;
+    border: 1px solid var(--border-color);
+    color: var(--text-main);
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.2s ease;
+}
+
+.btn-pill:hover {
+    background: var(--accent-blue);
+    color: #000;
+    border-color: var(--accent-blue);
+    transform: translateY(-1px);
+}
+
+.quick-action-pills::-webkit-scrollbar {
+    height: 4px;
+}
+
+.quick-action-pills::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 4px;
+}

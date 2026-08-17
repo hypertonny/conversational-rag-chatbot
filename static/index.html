@@ -415,19 +415,85 @@
                     </div>
                     <!-- Main Chat Area -->
                     <div class="chatgpt-main">
-                        <div class="chat-header-title" style="padding: 15px 20px; border-bottom: 1px solid var(--border-color); background: var(--bg-card);">
-                            <i class="fa-solid fa-robot"></i>
-                            <span id="chatTitleDisplay">Primavera Unifier AI Assistant</span>
-                        </div>
-                        <div id="chatMessagesFull" class="chat-messages" style="flex: 1; padding: 20px; overflow-y: auto;">
-                            <div class="message assistant">
-                                <div class="message-content">Hello! I am your Primavera Unifier AI Assistant. How can I help you today?</div>
+                        <div class="chat-header-title" style="padding: 12px 20px; border-bottom: 1px solid var(--border-color); background: var(--bg-card); display: flex; align-items: center; justify-content: space-between;">
+                            <div>
+                                <i class="fa-solid fa-robot" style="color: var(--accent-blue);"></i>
+                                <span id="chatTitleDisplay" style="font-weight: 600;">Primavera Unifier AI Assistant</span>
+                            </div>
+                            <div style="font-size: 0.85em; color: var(--text-muted);">
+                                ⚡ Groq LPU Powered
                             </div>
                         </div>
-                        <div class="chat-input-area" style="padding: 20px; background: transparent; border: none;">
-                            <div class="input-wrapper" style="display: flex; gap: 10px; max-width: 800px; margin: 0 auto; width: 100%; position: relative;">
-                                <input type="text" id="chatInputFull" placeholder="Ask anything about your Unifier data..." autocomplete="off" style="width: 100%; padding: 15px 20px; border-radius: 25px; background: var(--bg-card); border: 1px solid var(--border-color); color: #fff; font-size: 15px;">
-                                <button id="btnSendChatFull" class="btn-send" style="position: absolute; right: 8px; top: 8px; width: 36px; height: 36px; border-radius: 50%;"><i class="fa-solid fa-paper-plane"></i></button>
+
+                        <div id="chatMessagesFull" class="chat-messages" style="flex: 1; padding: 20px; overflow-y: auto;">
+                            <div class="message assistant">
+                                <div class="message-content">
+                                    <h3>🏛️ Welcome to Oracle Primavera Unifier AI Assistant</h3>
+                                    <p>I can help you query active projects, business process records, user directories, risk logs, cost forecasts, and official Unifier documentation guides.</p>
+                                    <p style="margin-top: 10px; font-weight: 500;">Select a <b>Quick Action</b> or a <b>Stakeholder Role Question</b> below to get started:</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- STAKEHOLDER PERSONA SELECTOR & QUICK PROMPTS MENU -->
+                        <div class="chat-controls-container" style="padding: 10px 20px; background: var(--bg-card); border-top: 1px solid var(--border-color);">
+                            <!-- Stakeholder Persona Dropdowns -->
+                            <div style="display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap;">
+                                <div style="flex: 1; min-width: 220px;">
+                                    <label style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; font-weight: 600; display: block; margin-bottom: 4px;"><i class="fa-solid fa-user-tag"></i> Stakeholder Role</label>
+                                    <select id="personaSelector" class="form-control" style="font-size: 13px; padding: 6px 10px;">
+                                        <option value="1">1. General End Users & Individual Contributors</option>
+                                        <option value="2">2. Field & Site Engineers, Inspectors</option>
+                                        <option value="3">3. Contractors, Subcontractors & Vendors</option>
+                                        <option value="4">4. Document Controllers & Records Managers</option>
+                                        <option value="5">5. Project Coordinators & PMO Analysts</option>
+                                        <option value="6">6. Cost Engineers & Cost Managers</option>
+                                        <option value="7">7. Planners & Schedule Managers</option>
+                                        <option value="8">8. Commercial & Procurement Managers</option>
+                                        <option value="9">9. Resource & Functional Managers</option>
+                                        <option value="10">10. Risk, Quality & HSE Managers</option>
+                                        <option value="11">11. Project Managers</option>
+                                        <option value="12">12. Program Directors & Portfolio Leaders</option>
+                                        <option value="13">13. Finance Managers & Auditors</option>
+                                        <option value="14">14. Executives & Steering Committee</option>
+                                        <option value="15">15. Unifier SMEs & Administrators</option>
+                                        <option value="16">16. AI & Security Compliance Teams</option>
+                                    </select>
+                                </div>
+                                <div style="flex: 2; min-width: 300px;">
+                                    <label style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; font-weight: 600; display: block; margin-bottom: 4px;"><i class="fa-solid fa-list-check"></i> Sample Stakeholder Question</label>
+                                    <select id="personaQuestionSelector" class="form-control" style="font-size: 13px; padding: 6px 10px;">
+                                        <!-- Dynamically populated by JS -->
+                                    </select>
+                                </div>
+                            </div>
+
+                            <!-- Quick Action Buttons Horizontal Scroll -->
+                            <div class="quick-action-pills" style="display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px; scrollbar-width: thin;">
+                                <button class="btn-pill" data-prompt="What needs my attention today across all projects and shells? Rank items by urgency."><i class="fa-solid fa-list-check"></i> My Tasks & Deadlines</button>
+                                <button class="btn-pill" data-prompt="Explain a business process record in plain language: purpose, status, recent changes, and next steps."><i class="fa-solid fa-file-contract"></i> Explain a Record</button>
+                                <button class="btn-pill" data-prompt="Find all records related to active contracts or vendor keywords and group by status."><i class="fa-solid fa-magnifying-glass"></i> Find Record/Document</button>
+                                <button class="btn-pill" data-prompt="Review my draft record for missing fields, inconsistent values, or missing attachments."><i class="fa-solid fa-file-pen"></i> Check My Draft</button>
+                                <button class="btn-pill" data-prompt="Give me a weekly project health summary covering scope, schedule, cost, risks, and quality."><i class="fa-solid fa-chart-line"></i> Project Health Summary</button>
+                                <button class="btn-pill" data-prompt="Provide a cost health summary including budget, commitments, actuals, pending changes, and forecast."><i class="fa-solid fa-sack-dollar"></i> Cost & Forecast Status</button>
+                                <button class="btn-pill" data-prompt="Quantify approved, pending, and potential change exposure and high/low cost outcomes."><i class="fa-solid fa-scale-unbalanced"></i> Pending Changes & Exposure</button>
+                                <button class="btn-pill" data-prompt="Show milestones due in the next 30, 60, and 90 days with baseline dates and variances."><i class="fa-solid fa-calendar-days"></i> Milestones & Schedule Risks</button>
+                                <button class="btn-pill" data-prompt="Identify workflow bottlenecks by business process, workflow step, assignee, and average age."><i class="fa-solid fa-hourglass-half"></i> Workflow Bottlenecks</button>
+                                <button class="btn-pill" data-prompt="Show top project risks ranked by exposure, trend, proximity, and potential cost/schedule impact."><i class="fa-solid fa-shield-cat"></i> Open Risks & Issues</button>
+                                <button class="btn-pill" data-prompt="Compare contractor and vendor performance using response time, quality, delivery, and compliance."><i class="fa-solid fa-industry"></i> Vendor Performance</button>
+                                <button class="btn-pill" data-prompt="Prepare a draft weekly status report covering progress, cost, schedule, changes, risks, and quality."><i class="fa-solid fa-file-lines"></i> Create Weekly Report</button>
+                                <button class="btn-pill" data-prompt="Give me a one-page executive portfolio summary: performance, outlook, top exposures, and decisions required."><i class="fa-solid fa-briefcase"></i> Prepare Executive Brief</button>
+                                <button class="btn-pill" data-prompt="Identify data-quality exceptions including missing owners, invalid dates, and incomplete classifications."><i class="fa-solid fa-broom"></i> Find Data-Quality Issues</button>
+                                <button class="btn-pill" data-prompt="Prepare a draft escalation for open issues explaining immediate impact and decision deadlines."><i class="fa-solid fa-envelope-open-text"></i> Draft Response/Escalation</button>
+                                <button class="btn-pill" data-prompt="Where can I find the official Oracle Unifier Integration Interface, uDesigner, and user guides?"><i class="fa-solid fa-graduation-cap"></i> Ask Unifier How-To</button>
+                            </div>
+                        </div>
+
+                        <!-- Chat Input Box -->
+                        <div class="chat-input-area" style="padding: 15px 20px; background: var(--bg-card); border-top: 1px solid var(--border-color);">
+                            <div class="input-wrapper" style="display: flex; gap: 10px; max-width: 900px; margin: 0 auto; width: 100%; position: relative;">
+                                <input type="text" id="chatInputFull" placeholder="Type a question or select a stakeholder prompt above..." autocomplete="off" style="width: 100%; padding: 14px 45px 14px 20px; border-radius: 25px; background: var(--bg-primary); border: 1px solid var(--border-color); color: #fff; font-size: 14px;">
+                                <button id="btnSendChatFull" class="btn-send" style="position: absolute; right: 8px; top: 7px; width: 34px; height: 34px; border-radius: 50%; background: var(--accent-blue); color: #000; border: none; cursor: pointer;"><i class="fa-solid fa-paper-plane"></i></button>
                             </div>
                         </div>
                     </div>
