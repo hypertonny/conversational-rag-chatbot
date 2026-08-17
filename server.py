@@ -6,7 +6,18 @@ import sqlite3
 import uuid
 from datetime import datetime
 from typing import Dict, Any, Optional, List
-from fastapi import FastAPI, HTTPException, Response, status
+from fastapi import FastAPI, HTTPException, Response, status, BackgroundTasks
+
+def _run_background_sync(token: str, url: str):
+    try:
+        from sync_manager import SyncManager
+        client = UnifierClient(bearer_token=token, base_url=url)
+        sm = SyncManager(client=client)
+        logger.info("Starting background synchronization...")
+        stats = sm.sync_all()
+        logger.info(f"Background sync complete: {stats}")
+    except Exception as e:
+        logger.error(f"Background sync error: {e}")
 
 # Configure server logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -238,17 +249,14 @@ class SyncReq(BaseModel):
     base_url: Optional[str] = ""
 
 @app.post("/api/sync")
-def trigger_sync(req: SyncReq):
+def trigger_sync(req: SyncReq, background_tasks: BackgroundTasks):
     token = req.bearer_token or os.getenv("UNIFIER_BEARER_TOKEN", "")
     url = req.base_url or os.getenv("UNIFIER_BASE_URL", UnifierClient.DEFAULT_BASE_URL)
     if not token:
         raise HTTPException(status_code=400, detail="Bearer token is required to trigger sync.")
     
-    from sync_manager import SyncManager
-    client = UnifierClient(bearer_token=token, base_url=url)
-    sm = SyncManager(client=client)
-    stats = sm.sync_all()
-    return {"success": True, "stats": stats}
+    background_tasks.add_task(_run_background_sync, token, url)
+    return {"success": True, "message": "Synchronization started in background."}
 
 @app.get("/api/sync-stats")
 def get_sync_stats_endpoint():
