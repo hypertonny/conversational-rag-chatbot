@@ -37,10 +37,14 @@ app = FastAPI(
 )
 
 # --- DATABASE SETUP ---
-DB_PATH = "chats.db"
+def get_chat_db_connection():
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA busy_timeout=5000;")
+    return conn
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_chat_db_connection()
     c = conn.cursor()
     c.execute('''
         CREATE TABLE IF NOT EXISTS conversations (
@@ -265,7 +269,7 @@ def get_sync_stats_endpoint():
 
 @app.get("/api/conversations")
 def list_conversations():
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_chat_db_connection()
     c = conn.cursor()
     c.execute('SELECT id, title, updated_at FROM conversations ORDER BY updated_at DESC')
     rows = c.fetchall()
@@ -274,7 +278,7 @@ def list_conversations():
 
 @app.get("/api/conversations/{conv_id}")
 def get_conversation(conv_id: str):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_chat_db_connection()
     c = conn.cursor()
     c.execute('SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY created_at ASC', (conv_id,))
     rows = c.fetchall()
@@ -283,7 +287,7 @@ def get_conversation(conv_id: str):
 
 @app.delete("/api/conversations/{conv_id}")
 def delete_conversation(conv_id: str):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_chat_db_connection()
     c = conn.cursor()
     c.execute('DELETE FROM messages WHERE conversation_id = ?', (conv_id,))
     c.execute('DELETE FROM conversations WHERE id = ?', (conv_id,))
@@ -304,7 +308,7 @@ def chat(req: ChatReq):
 
         # Database logic for conversation
         conv_id = req.conversation_id
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_chat_db_connection()
         c = conn.cursor()
 
         if not conv_id:

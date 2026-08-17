@@ -20,7 +20,9 @@ DB_CACHE_PATH = "unifier_cache.db"
 CHROMA_DIR = "chroma_db"
 
 def get_db_connection():
-    conn = sqlite3.connect(DB_CACHE_PATH)
+    conn = sqlite3.connect(DB_CACHE_PATH, timeout=10.0)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA busy_timeout=5000;")
     conn.row_factory = sqlite3.Row
     return conn
 
