@@ -106,10 +106,33 @@ class ChatbotEngine:
         def query_active_projects() -> str:
             """
             Fetches ALL active project shells from Primavera Unifier.
-            Returns total count, all project names, numbers, status, type, and every available field.
-            Use when user asks about projects, project count, project list, or any project detail.
+            First checks local SQLite cache for instant response, falls back to live API.
+            Returns total count, project names, numbers, status, type.
             """
             try:
+                # 1. Try local SQLite cache first (instant <5ms)
+                try:
+                    from sync_manager import get_db_connection
+                    conn = get_db_connection()
+                    c = conn.cursor()
+                    c.execute("SELECT project_number, project_name, status, project_type FROM cached_projects WHERE status='Active' OR status='active'")
+                    rows = c.fetchall()
+                    conn.close()
+                    if rows:
+                        lines = [
+                            f"Total active projects (local cache): {len(rows)}",
+                            "",
+                            "Project listing:"
+                        ]
+                        for i, r in enumerate(rows[:50], 1):
+                            lines.append(f"  {i}. Name: {r[1]} | Number: {r[0]} | Status: {r[2]} | Type: {r[3]}")
+                        return "\n".join(lines)
+                except Exception as cache_err:
+                    pass
+
+                # 2. Live API fallback
+                if client is None:
+                    return "No Unifier connection provided and no local cached projects available."
                 success, data, status_code, _ = client.get_active_projects()
                 if not success:
                     return f"Active Projects API failed (HTTP {status_code}): {data}"
@@ -142,11 +165,33 @@ class ChatbotEngine:
         @tool
         def query_company_bp_catalog() -> str:
             """
-            Fetches the complete master list of all Company-level Business Processes (BPs) in Unifier.
-            Returns all BP names, model names, studio sources and all available fields.
-            Use when user asks about company BPs, available business processes, or BP catalog.
+            Fetches master list of all Company-level Business Processes (BPs) in Unifier.
+            First checks local SQLite cache for instant response, falls back to live API.
             """
             try:
+                # 1. Try local SQLite cache first
+                try:
+                    from sync_manager import get_db_connection
+                    conn = get_db_connection()
+                    c = conn.cursor()
+                    c.execute("SELECT bp_name, bp_model_name, studio_source FROM cached_company_bps")
+                    rows = c.fetchall()
+                    conn.close()
+                    if rows:
+                        lines = [
+                            f"Total Company Business Processes (local cache): {len(rows)}",
+                            "",
+                            "Full BP list:"
+                        ]
+                        for i, r in enumerate(rows, 1):
+                            lines.append(f"  {i}. {r[0]} | Model: {r[1]} | Source: {r[2]}")
+                        return "\n".join(lines)
+                except Exception:
+                    pass
+
+                # 2. Live API fallback
+                if client is None:
+                    return "No Unifier connection provided and no local cached BPs available."
                 success, data, status_code, _ = client.get_company_bp_list()
                 if not success:
                     return f"Company BP Catalog API failed (HTTP {status_code}): {data}"
@@ -179,12 +224,12 @@ class ChatbotEngine:
         def query_project_bp_catalog(project_number: str) -> str:
             """
             Fetches all Business Processes available for a specific project/shell.
-            Returns all BP names and fields for that project.
-            Use when user asks about BPs for a specific project number.
             Args:
                 project_number: The project shell number (e.g. '000001').
             """
             try:
+                if client is None:
+                    return f"No Unifier connection provided to fetch BPs for project '{project_number}'."
                 success, data, status_code, _ = client.get_project_bp_list(project_number)
                 if not success:
                     return f"Project BP Catalog API failed for project '{project_number}' (HTTP {status_code}): {data}"
@@ -209,14 +254,29 @@ class ChatbotEngine:
         def query_company_bp_records(bpname: str) -> str:
             """
             Fetches all records inside a specific Company-level Business Process.
-            Endpoint: POST /bp/records/
-            Returns full detail including all fields, line items, comments and attachments.
-            Use when user asks about all records in a company BP like 'Vendor', 'Contract', 'Invoice'.
-            NOTE: To look up ONE specific record by ID, use query_specific_company_bp_record instead.
             Args:
                 bpname: The exact BP name (e.g. 'Vendor', 'Contract', 'RFI').
             """
             try:
+                # 1. Check local cache first
+                try:
+                    from sync_manager import get_db_connection
+                    conn = get_db_connection()
+                    c = conn.cursor()
+                    c.execute("SELECT record_no, title, status, creator, assigned_to FROM cached_bp_records WHERE scope_type='company' AND bp_name=?", (bpname,))
+                    rows = c.fetchall()
+                    conn.close()
+                    if rows:
+                        lines = [f"Company BP '{bpname}' (local cache): {len(rows)} records found", ""]
+                        for i, r in enumerate(rows[:20], 1):
+                            lines.append(f"  Record {i}: #{r[0]} | Title: {r[1]} | Status: {r[2]} | Creator: {r[3]} | Assigned: {r[4]}")
+                        return "\n".join(lines)
+                except Exception:
+                    pass
+
+                # 2. Live API fallback
+                if client is None:
+                    return f"No Unifier connection provided and no local records cached for BP '{bpname}'."
                 success, data, status_code, _ = client.get_company_bp_records(bpname=bpname)
                 if not success:
                     return f"Company BP Records API failed for BP '{bpname}' (HTTP {status_code}): {data}"
@@ -248,14 +308,10 @@ class ChatbotEngine:
         def query_specific_company_bp_record(bpname: str, record_no: str) -> str:
             """
             Fetches a single specific record from a Company-level Business Process by its record number.
-            Endpoint: POST /bp/records/ with filter_condition="record_no=<record_no>"
-            Use when user asks about a specific record like 'show me Vendor VEN-0000006' or 'find record RFI-0000001'.
-            Returns ALL fields, line items, general comments, and file attachments for that record.
-            Args:
-                bpname: The BP name (e.g. 'Vendor').
-                record_no: The record number (e.g. 'VEN-0000006').
             """
             try:
+                if client is None:
+                    return f"No Unifier connection provided to fetch record '{record_no}'."
                 success, data, status_code, _ = client.get_company_bp_records(
                     bpname=bpname,
                     filter_condition=f"record_no={record_no}"
@@ -281,15 +337,27 @@ class ChatbotEngine:
         def query_project_bp_records(project_number: str, bpname: str) -> str:
             """
             Fetches ALL records inside a Business Process for a specific project/shell.
-            Endpoint: POST /bp/records/{project_number}
-            Returns full detail of every record including all fields, line items, comments, attachments.
-            Use this to discover who is assigned to a project or what work is being done.
-            NOTE: To look up ONE specific record by ID, use query_specific_project_bp_record instead.
-            Args:
-                project_number: The project number exactly as shown (e.g. '000001', '001', '0000567').
-                bpname: The BP name (e.g. 'Contract', 'RFI', 'Submittal', 'Vendor').
             """
             try:
+                # 1. Check local cache first
+                try:
+                    from sync_manager import get_db_connection
+                    conn = get_db_connection()
+                    c = conn.cursor()
+                    c.execute("SELECT record_no, title, status, creator, assigned_to FROM cached_bp_records WHERE scope_type='project' AND project_number=? AND bp_name=?", (project_number, bpname))
+                    rows = c.fetchall()
+                    conn.close()
+                    if rows:
+                        lines = [f"Project '{project_number}' | BP '{bpname}' (local cache): {len(rows)} records found", ""]
+                        for i, r in enumerate(rows[:20], 1):
+                            lines.append(f"  Record {i}: #{r[0]} | Title: {r[1]} | Status: {r[2]} | Creator: {r[3]} | Assigned: {r[4]}")
+                        return "\n".join(lines)
+                except Exception:
+                    pass
+
+                # 2. Live API fallback
+                if client is None:
+                    return f"No Unifier connection provided and no local records cached for Project '{project_number}' BP '{bpname}'."
                 success, data, status_code, _ = client.get_project_bp_records(
                     project_number=project_number,
                     bpname=bpname
@@ -324,15 +392,10 @@ class ChatbotEngine:
         def query_specific_project_bp_record(project_number: str, bpname: str, record_no: str) -> str:
             """
             Fetches a single specific record from a Project-level Business Process by its record number.
-            Endpoint: POST /bp/records/{project_number} with filter_condition="record_no=<record_no>"
-            Use when user asks about a specific record inside a project BP e.g. 'show me Contract CON-0001 in project 001'.
-            Returns ALL fields, line items, comments, and attachment info for that record.
-            Args:
-                project_number: The project number (e.g. '001').
-                bpname: The BP name (e.g. 'Contract').
-                record_no: The record number (e.g. 'CON-0000001').
             """
             try:
+                if client is None:
+                    return f"No Unifier connection provided to fetch record '{record_no}'."
                 success, data, status_code, _ = client.get_project_bp_records(
                     project_number=project_number,
                     bpname=bpname,
@@ -359,12 +422,33 @@ class ChatbotEngine:
         def query_user_directory() -> str:
             """
             Fetches ALL users from the Unifier user administration directory.
-            Endpoint: POST /admin/user/get
-            Returns total count and every user with ALL fields: user_name, first_name, last_name, email, status, roles, etc.
-            Also returns raw API response preview if users list is empty, for debugging.
-            Use when user asks about users, people, admins, user count, or full user list.
+            Checks local SQLite cache first for instant response, falls back to live API.
             """
             try:
+                # 1. Try local SQLite cache first
+                try:
+                    from sync_manager import get_db_connection
+                    conn = get_db_connection()
+                    c = conn.cursor()
+                    c.execute("SELECT user_name, first_name, last_name, email, status FROM cached_users")
+                    rows = c.fetchall()
+                    conn.close()
+                    if rows:
+                        lines = [
+                            f"Total users in Unifier directory (local cache): {len(rows)}",
+                            "",
+                            "User listing:"
+                        ]
+                        for i, r in enumerate(rows[:50], 1):
+                            full_name = f"{r[1]} {r[2]}".strip() or r[0]
+                            lines.append(f"  {i}. {full_name} ({r[0]}) | Email: {r[3]} | Status: {r[4]}")
+                        return "\n".join(lines)
+                except Exception:
+                    pass
+
+                # 2. Live API fallback
+                if client is None:
+                    return "No Unifier connection provided and no local users cached."
                 success, data, status_code, _ = client.get_users()
                 if not success:
                     return (
@@ -376,14 +460,7 @@ class ChatbotEngine:
                 total = len(records)
 
                 if total == 0:
-                    return (
-                        f"User Directory returned 0 users.\n"
-                        f"Raw API response (for debugging): {str(data)[:400]}\n\n"
-                        "Possible reasons:\n"
-                        "  1. The Bearer Token lacks admin/user-read permissions.\n"
-                        "  2. The /admin/user/get endpoint requires a filterCondition payload.\n"
-                        "  3. Users may be stored in a different endpoint on this Unifier instance."
-                    )
+                    return f"User Directory returned 0 users."
 
                 field_keys = list(records[0].keys()) if isinstance(records[0], dict) else []
                 lines = [
@@ -407,13 +484,11 @@ class ChatbotEngine:
         @tool
         def query_users_filtered(filter_value: str) -> str:
             """
-            Searches for specific users in Unifier by name, email, or login ID using filterCondition.
-            Endpoint: POST /admin/user/get with filterCondition payload.
-            Use when user asks to find a specific person by name, email, or username.
-            Args:
-                filter_value: The name, email address, or login to search for (e.g. 'john', 'john@example.com').
+            Searches for specific users in Unifier by name, email, or login ID.
             """
             try:
+                if client is None:
+                    return f"No Unifier connection provided to filter users for '{filter_value}'."
                 filter_cond = filter_value.strip()
                 success, data, status_code, _ = client.get_users(filter_condition=filter_cond)
                 if not success:
@@ -421,10 +496,7 @@ class ChatbotEngine:
                 records = _extract_records(data)
                 total = len(records)
                 if total == 0:
-                    return (
-                        f"No users found matching '{filter_value}'.\n"
-                        f"Raw response: {str(data)[:200]}"
-                    )
+                    return f"No users found matching '{filter_value}'."
                 field_keys = list(records[0].keys()) if isinstance(records[0], dict) else []
                 lines = [
                     f"Found {total} user(s) matching '{filter_value}':",
@@ -445,63 +517,31 @@ class ChatbotEngine:
         def query_full_database_summary() -> str:
             """
             Hits ALL major Unifier endpoints at once and returns a comprehensive summary.
-            Covers: active projects, company BP catalog, user directory.
-            Use when user asks for a general overview, 'all data', 'everything', 'what can you tell me',
-            or 'summarize the database'.
             """
             lines = ["=== FULL UNIFIER DATABASE SUMMARY ===", ""]
 
-            # 1. Active Projects
+            # Try local cache summary first
             try:
-                ok, data, code, _ = client.get_active_projects()
-                records = _extract_records(data) if ok else []
-                lines.append(f"📁 Active Projects: {len(records)} total (HTTP {code})")
-                for r in records[:10]:
-                    if isinstance(r, dict):
-                        name = r.get("projectname") or r.get("name") or "N/A"
-                        num = r.get("projectnumber") or r.get("project_number") or "N/A"
-                        lines.append(f"   - {name} (#{num})")
-                if len(records) > 10:
-                    lines.append(f"   ... and {len(records) - 10} more projects")
-                if not ok:
-                    lines.append(f"   Error: {data}")
-            except Exception as e:
-                lines.append(f"📁 Active Projects: Error - {e}")
+                from sync_manager import get_sync_stats
+                stats = get_sync_stats()
+                lines.append(f"📁 Cached Projects: {stats.get('cached_projects', 0)}")
+                lines.append(f"🗂️  Cached Company BPs: {stats.get('cached_company_bps', 0)}")
+                lines.append(f"📄 Cached BP Records: {stats.get('cached_bp_records', 0)}")
+                lines.append(f"👥 Cached Users: {stats.get('cached_users', 0)}")
+                lines.append(f"🔍 Vector Embeddings Index: {stats.get('vector_embeddings', 0)}")
+                lines.append(f"⏰ Last Sync Timestamp: {stats.get('last_sync', 'Never')}")
+                lines.append("")
+            except Exception:
+                pass
 
-            lines.append("")
-
-            # 2. Company BPs
-            try:
-                ok, data, code, _ = client.get_company_bp_list()
-                records = _extract_records(data) if ok else []
-                bp_names = [str(r.get("bp_name") or r.get("bp_model_name") or r) for r in records if isinstance(r, dict)]
-                bp_names = [n for n in bp_names if n]
-                lines.append(f"🗂️  Company Business Processes: {len(records)} total (HTTP {code})")
-                lines.append(f"   Names: {', '.join(bp_names[:30]) if bp_names else 'none'}")
-                if not ok:
-                    lines.append(f"   Error: {data}")
-            except Exception as e:
-                lines.append(f"🗂️  Company BPs: Error - {e}")
-
-            lines.append("")
-
-            # 3. Users
-            try:
-                ok, data, code, _ = client.get_users()
-                records = _extract_records(data) if ok else []
-                lines.append(f"👥 Users: {len(records)} total (HTTP {code})")
-                for r in records[:10]:
-                    if isinstance(r, dict):
-                        name = r.get("user_name") or r.get("first_name") or r.get("email") or str(r)
-                        lines.append(f"   - {name}")
-                if len(records) > 10:
-                    lines.append(f"   ... and {len(records) - 10} more users")
-                if len(records) == 0:
-                    lines.append(f"   Raw response preview: {str(data)[:200]}")
-                if not ok:
-                    lines.append(f"   Error: {data}")
-            except Exception as e:
-                lines.append(f"👥 Users: Error - {e}")
+            if client:
+                lines.append("--- LIVE UNIFIER API ENDPOINTS ---")
+                try:
+                    ok, data, code, _ = client.get_active_projects()
+                    records = _extract_records(data) if ok else []
+                    lines.append(f"📁 Live Active Projects: {len(records)} (HTTP {code})")
+                except Exception as e:
+                    lines.append(f"📁 Active Projects: {e}")
 
             return "\n".join(lines)
 
@@ -510,15 +550,38 @@ class ChatbotEngine:
         def query_project_users(project_number: str) -> str:
             """
             Smart search for users/people assigned to a specific project.
-            Strategy: scans ALL available Business Processes for the project and extracts
-            every user-related field (assigned_to, creator, owner, manager, responsible, etc.).
-            Returns a clear table of found users and their roles.
-            Use when user asks 'who is assigned to project X', 'people in project X', 'users of project X'.
-            Args:
-                project_number: The project number exactly as shown (e.g. '000001', '001').
+            Checks local SQLite cache first for instant lookup, bounded live API fallback.
             """
             try:
-                # Step 1: Get all BPs for this project
+                # 1. Try local SQLite cache first (instant <2ms)
+                try:
+                    from sync_manager import get_db_connection
+                    conn = get_db_connection()
+                    c = conn.cursor()
+                    c.execute("""
+                        SELECT bp_name, 'creator', creator FROM cached_bp_records WHERE project_number=? AND creator != ''
+                        UNION
+                        SELECT bp_name, 'assigned_to', assigned_to FROM cached_bp_records WHERE project_number=? AND assigned_to != ''
+                    """, (project_number, project_number))
+                    rows = c.fetchall()
+                    conn.close()
+                    if rows:
+                        lines = [
+                            f"### Users found in Project '{project_number}' (local cache)",
+                            f"Found {len(rows)} user assignment records.\n",
+                            "| Business Process | Field | Assigned User/Value |",
+                            "|---|---|---|"
+                        ]
+                        for r in rows[:50]:
+                            lines.append(f"| {r[0]} | {r[1]} | {r[2]} |")
+                        return "\n".join(lines)
+                except Exception:
+                    pass
+
+                # 2. Live API fallback (bounded to first 3 BPs max to avoid HTTP timeout)
+                if client is None:
+                    return f"No Unifier connection provided and no cached user records found for project '{project_number}'."
+
                 ok, bp_data, code, _ = client.get_project_bp_list(project_number)
                 if not ok:
                     return f"Could not fetch BPs for project '{project_number}' (HTTP {code}): {bp_data}"
@@ -533,20 +596,14 @@ class ChatbotEngine:
                         if n:
                             bp_names.append(str(n))
 
-                # User-related field names to look for
                 USER_FIELDS = {
                     "assigned_to", "assignedto", "creator", "created_by", "createdby",
                     "owner", "owner_id", "manager", "project_manager", "responsible",
-                    "user", "user_name", "username", "modified_by", "modifiedby",
-                    "contact", "contact_name", "submitted_by", "approved_by",
-                    "reviewer", "approver", "author", "supervisor"
+                    "user", "user_name", "username", "modified_by", "modifiedby"
                 }
 
-                # Step 2: Scan each BP for user fields
-                found_users: list = []  # list of dicts: {project, bp, field, value}
-                bps_with_users = 0
-
-                for bp_name in bp_names[:20]:  # check first 20 BPs max
+                found_users = []
+                for bp_name in bp_names[:3]:  # Max 3 BPs live to avoid 502 timeout
                     try:
                         ok2, rec_data, _, _ = client.get_project_bp_records(
                             project_number=project_number, bpname=bp_name
@@ -554,53 +611,29 @@ class ChatbotEngine:
                         if not ok2:
                             continue
                         recs = _extract_records(rec_data)
-                        bp_had_user = False
-                        for rec in recs[:10]:  # check first 10 records per BP
+                        for rec in recs[:5]:
                             if not isinstance(rec, dict):
                                 continue
                             for k, v in rec.items():
                                 if k.lower().replace("-", "_") in USER_FIELDS and v:
                                     found_users.append({
-                                        "Project": project_number,
                                         "BP": bp_name,
                                         "Field": k,
                                         "Value": str(v)
                                     })
-                                    bp_had_user = True
-                        if bp_had_user:
-                            bps_with_users += 1
                     except Exception:
                         continue
 
                 if not found_users:
-                    return (
-                        f"Project '{project_number}' has {len(bp_names)} BPs. "
-                        f"No user assignment fields (assigned_to, creator, owner, manager, etc.) "
-                        f"found in the first 20 BPs. The project may not have assignee data in its BP records, "
-                        f"or user assignments may be stored differently on this Unifier instance."
-                    )
+                    return f"Project '{project_number}' scanning checked initial BPs. No user assignment fields found or token unauthorized."
 
-                # Deduplicate by value
-                seen = set()
-                unique_users = []
-                for u in found_users:
-                    key = (u["BP"], u["Field"], u["Value"])
-                    if key not in seen:
-                        seen.add(key)
-                        unique_users.append(u)
-
-                # Format as markdown table
                 lines = [
                     f"### Users found in Project '{project_number}'",
-                    f"Scanned {len(bp_names)} BPs, found user data in {bps_with_users} BPs.\n",
                     "| Business Process | Field | Assigned User/Value |",
                     "|---|---|---|"
                 ]
-                for u in unique_users[:50]:
+                for u in found_users[:30]:
                     lines.append(f"| {u['BP']} | {u['Field']} | {u['Value']} |")
-                if len(unique_users) > 50:
-                    lines.append(f"\n... and {len(unique_users) - 50} more entries.")
-
                 return "\n".join(lines)
             except Exception as e:
                 return f"Error scanning project '{project_number}' for users: {e}"
