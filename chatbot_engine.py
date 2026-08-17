@@ -680,6 +680,31 @@ class ChatbotEngine:
             except Exception as e:
                 return f"Sync error: {e}"
 
+        # ── TOOL 14: Oracle Primavera Unifier Documentation & References ─────
+        @tool
+        def query_oracle_documentation_guides() -> str:
+            """
+            Returns the official Oracle Primavera Unifier v26 documentation links, user manuals, and BP field schema mappings (bp_model_name, bp_name, studio_source).
+            Use when user asks about documentation, reference guides, uDesigner guide, integration interface guide, business process user guide, or BP field mapping definitions.
+            """
+            return (
+                "### 📚 Official Oracle Primavera Unifier v26 Reference Guides & Schema\n\n"
+                "#### **Official Oracle Documentation Links**\n"
+                "- 🔗 [Integration Interface Guide](https://docs.oracle.com/en/industries/construction-engineering/primavera-unifier/26/integration-interface/introduction-10280474a.html)\n"
+                "- 🔗 [Data Reference Guide](http://docs.oracle.com/en/industries/construction-engineering/primavera-unifier/26/reference/introduction-10289477a.html)\n"
+                "- 🔗 [Business Processes User Guide](https://docs.oracle.com/en/industries/construction-engineering/primavera-unifier/26/business-process/workingwithbusinessprocesses-10292605a.html)\n"
+                "- 🔗 [uDesigner User Guide](https://docs.oracle.com/en/industries/construction-engineering/primavera-unifier/26/udesigner/introducingunifierudesigner-77633a.html)\n"
+                "- 🔗 [General User Guide](https://docs.oracle.com/en/industries/construction-engineering/primavera-unifier/26/general-user/gettingstartedwithgeneraloperations-73021a.html)\n"
+                "- 🔗 [Managers User Guide](https://docs.oracle.com/en/industries/construction-engineering/primavera-unifier/26/general-user/gettingstartedwithgeneraloperations-73021a.html)\n\n"
+                "#### **Business Process (BP) Field Schema Mapping**\n"
+                "| Field Name | Description / Unique Property |\n"
+                "|---|---|\n"
+                "| `bp_model_name` | The BP Model ID (Unique Identifier) |\n"
+                "| `bp_name` | The BP Display Name (Unique) |\n"
+                "| `studio_source` | The BP Type / Studio Source (simple, database, etc.) |\n"
+                "| `no_workflow` | Boolean flag indicating if BP is non-workflow |\n"
+            )
+
         tools = [
             query_active_projects,            # GET  /admin/projectshell?Status=Active
             query_company_bp_catalog,          # GET  /admin/bps
@@ -694,6 +719,7 @@ class ChatbotEngine:
             query_full_database_summary,       # All endpoints combined
             query_vector_search_unifier,       # ChromaDB Vector Store Search
             trigger_local_data_sync,           # SQLite + ChromaDB Sync
+            query_oracle_documentation_guides, # Official Oracle Unifier Docs & BP Schema Mapping
         ]
 
         # ── Build LLM ────────────────────────────────────────────────────────
@@ -725,7 +751,7 @@ class ChatbotEngine:
             "You are a STRICT Oracle Primavera Unifier database assistant. "
             "Unifier is a construction project management platform.\n"
             "You ONLY answer questions about data stored in this Unifier database.\n\n"
-            "TOOLS AVAILABLE (13 live & cached tools — call them to get real data):\n"
+            "TOOLS AVAILABLE (14 live & cached tools — call them to get real data):\n"
             "  1.  query_active_projects — all active project shells (name, number, status, type)\n"
             "  2.  query_company_bp_catalog — list of all Company-level Business Processes\n"
             "  3.  query_project_bp_catalog(project_number) — BPs for a project\n"
@@ -738,7 +764,8 @@ class ChatbotEngine:
             "  10. query_project_users(project_number) — SMART: scans ALL project BPs to find assigned users\n"
             "  11. query_full_database_summary — overview from all endpoints\n"
             "  12. query_vector_search_unifier(query) — FAST semantic vector search over cached records\n"
-            "  13. trigger_local_data_sync — Sync remote Unifier data into local SQLite & ChromaDB\n\n"
+            "  13. trigger_local_data_sync — Sync remote Unifier data into local SQLite & ChromaDB\n"
+            "  14. query_oracle_documentation_guides — Returns official Oracle Unifier v26 documentation URLs & BP schema mappings\n\n"
             "OFFICIAL ORACLE PRIMAVERA UNIFIER V26 REFERENCE GUIDES:\n"
             "  - Integration Interface Guide: https://docs.oracle.com/en/industries/construction-engineering/primavera-unifier/26/integration-interface/introduction-10280474a.html\n"
             "  - Data Reference Guide: http://docs.oracle.com/en/industries/construction-engineering/primavera-unifier/26/reference/introduction-10289477a.html\n"
