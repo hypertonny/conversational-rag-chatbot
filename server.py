@@ -233,6 +233,28 @@ def custom_request(req: CustomRequestReq):
         "headers": resp_headers
     }
 
+class SyncReq(BaseModel):
+    bearer_token: Optional[str] = ""
+    base_url: Optional[str] = ""
+
+@app.post("/api/sync")
+def trigger_sync(req: SyncReq):
+    token = req.bearer_token or os.getenv("UNIFIER_BEARER_TOKEN", "")
+    url = req.base_url or os.getenv("UNIFIER_BASE_URL", UnifierClient.DEFAULT_BASE_URL)
+    if not token:
+        raise HTTPException(status_code=400, detail="Bearer token is required to trigger sync.")
+    
+    from sync_manager import SyncManager
+    client = UnifierClient(bearer_token=token, base_url=url)
+    sm = SyncManager(client=client)
+    stats = sm.sync_all()
+    return {"success": True, "stats": stats}
+
+@app.get("/api/sync-stats")
+def get_sync_stats_endpoint():
+    from sync_manager import get_sync_stats
+    return {"success": True, "stats": get_sync_stats()}
+
 @app.get("/api/conversations")
 def list_conversations():
     conn = sqlite3.connect(DB_PATH)

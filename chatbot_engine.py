@@ -605,6 +605,48 @@ class ChatbotEngine:
             except Exception as e:
                 return f"Error scanning project '{project_number}' for users: {e}"
 
+        # ── TOOL 12: Vector Store Semantic Search ─────────────────────────────
+        @tool
+        def query_vector_search_unifier(query: str, project_number: str = "", bp_name: str = "") -> str:
+            """
+            Performs fast semantic similarity vector search across the cached ChromaDB vector store.
+            Use for open-ended questions like 'find change orders related to concrete', 'why was contract delayed', 'search for supplier documents'.
+            Args:
+                query: Search text query.
+                project_number: Optional filter by project number.
+                bp_name: Optional filter by BP name.
+            """
+            try:
+                from sync_manager import query_vector_search
+                results = query_vector_search(query_text=query, project_number=project_number or None, bp_name=bp_name or None, n_results=5)
+                if not results:
+                    return "No matching semantic results found in the local vector store. Try live querying or triggering a sync."
+                lines = [f"Found {len(results)} relevant vector matches:"]
+                for idx, r in enumerate(results, 1):
+                    doc = r.get("document", "")
+                    meta = r.get("metadata", {})
+                    dist = r.get("distance")
+                    score_str = f" (distance: {dist:.3f})" if dist is not None else ""
+                    lines.append(f"  {idx}. [{meta.get('scope_type', 'record')}] {doc[:300]}{score_str}")
+                return "\n".join(lines)
+            except Exception as e:
+                return f"Vector search error: {e}"
+
+        # ── TOOL 13: Local Fast Cache Sync ─────────────────────────────────────
+        @tool
+        def trigger_local_data_sync() -> str:
+            """
+            Triggers a full sync of remote Unifier REST API data into the local SQLite cache and ChromaDB vector store.
+            Use when user asks to 'sync data', 'refresh database', 'update local vector store'.
+            """
+            try:
+                from sync_manager import SyncManager
+                sm = SyncManager(client=client)
+                res = sm.sync_all()
+                return f"Sync complete! Total records synced: {res.get('total_records_synced', 0)} in {res.get('elapsed_ms', 0):.1f}ms."
+            except Exception as e:
+                return f"Sync error: {e}"
+
         tools = [
             query_active_projects,            # GET  /admin/projectshell?Status=Active
             query_company_bp_catalog,          # GET  /admin/bps
@@ -617,9 +659,11 @@ class ChatbotEngine:
             query_users_filtered,              # POST /admin/user/get (with filter)
             query_project_users,               # Smart: scans ALL project BPs for user fields
             query_full_database_summary,       # All endpoints combined
+            query_vector_search_unifier,       # ChromaDB Vector Store Search
+            trigger_local_data_sync,           # SQLite + ChromaDB Sync
         ]
 
-        # \u2500\u2500 Build LLM \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+        # ── Build LLM ────────────────────────────────────────────────────────
         try:
             if provider == "groq":
                 if not self.groq_api_key:
@@ -643,43 +687,40 @@ class ChatbotEngine:
         except Exception as e:
             return f"Failed to initialise LLM: {e}"
 
-        # \u2500\u2500 System Prompt \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+        # ── System Prompt ────────────────────────────────────────────────────
         system_prompt = (
             "You are a STRICT Oracle Primavera Unifier database assistant. "
             "Unifier is a construction project management platform.\n"
             "You ONLY answer questions about data stored in this Unifier database.\n\n"
-            "TOOLS AVAILABLE (11 live tools \u2014 call them to get real data):\n"
-            "  1.  query_active_projects \u2014 all active project shells (name, number, status, type)\n"
-            "  2.  query_company_bp_catalog \u2014 list of all Company-level Business Processes\n"
-            "  3.  query_project_bp_catalog(project_number) \u2014 BPs for a project\n"
-            "  4.  query_company_bp_records(bpname) \u2014 all records in a Company BP\n"
-            "  5.  query_specific_company_bp_record(bpname, record_no) \u2014 one Company BP record by ID\n"
-            "  6.  query_project_bp_records(project_number, bpname) \u2014 all records in a Project BP\n"
-            "  7.  query_specific_project_bp_record(project_number, bpname, record_no) \u2014 one Project BP record\n"
-            "  8.  query_user_directory \u2014 full user list from /admin/user/get\n"
-            "  9.  query_users_filtered(filter_value) \u2014 search user by name or email\n"
-            "  10. query_project_users(project_number) \u2014 SMART: scans ALL project BPs to find assigned users\n"
-            "  11. query_full_database_summary \u2014 overview from all endpoints\n\n"
+            "TOOLS AVAILABLE (13 live & cached tools — call them to get real data):\n"
+            "  1.  query_active_projects — all active project shells (name, number, status, type)\n"
+            "  2.  query_company_bp_catalog — list of all Company-level Business Processes\n"
+            "  3.  query_project_bp_catalog(project_number) — BPs for a project\n"
+            "  4.  query_company_bp_records(bpname) — all records in a Company BP\n"
+            "  5.  query_specific_company_bp_record(bpname, record_no) — one Company BP record by ID\n"
+            "  6.  query_project_bp_records(project_number, bpname) — all records in a Project BP\n"
+            "  7.  query_specific_project_bp_record(project_number, bpname, record_no) — one Project BP record\n"
+            "  8.  query_user_directory — full user list from /admin/user/get\n"
+            "  9.  query_users_filtered(filter_value) — search user by name or email\n"
+            "  10. query_project_users(project_number) — SMART: scans ALL project BPs to find assigned users\n"
+            "  11. query_full_database_summary — overview from all endpoints\n"
+            "  12. query_vector_search_unifier(query) — FAST semantic vector search over cached records\n"
+            "  13. trigger_local_data_sync — Sync remote Unifier data into local SQLite & ChromaDB\n\n"
             "STRICT RULES:\n"
             "1. SCOPE: ONLY answer Unifier database questions. For any out-of-scope question "
             "(politics, news, general knowledge, geography) respond EXACTLY: "
             "'I can only answer questions about your Primavera Unifier database. "
             "I cannot answer general knowledge questions.'\n"
             "2. ALWAYS call the right tool before answering. NEVER fabricate or guess data.\n"
-            "3. OUTPUT FORMAT \u2014 MANDATORY:\n"
+            "3. OUTPUT FORMAT — MANDATORY:\n"
             "   - ALWAYS present lists, records, and data as MARKDOWN TABLES.\n"
             "   - Use | Column | Column | format with a header separator row |---|---|\n"
             "   - For projects table: columns = | # | Project Name | Project Number | Status | Type |\n"
             "   - For users table: columns = | # | Name/Username | Role/Field | Source BP |\n"
             "   - For BP records: present key fields as a table.\n"
-            "4. For 'users in project X': call query_project_users(project_number). "
-            "This smart tool scans ALL BPs and extracts every user-related field.\n"
-            "5. For 'give me 5 projects and their users': "
-            "call query_active_projects to get project list, then call query_project_users "
-            "for each of the 5 projects, combine results into a unified markdown table.\n"
-            "6. For 'all data': call query_full_database_summary.\n"
-            "7. For a specific record (record_no given): use query_specific_company_bp_record or query_specific_project_bp_record.\n"
-            "8. Report the HTTP status code and raw response if a tool fails so the user can debug.\n"
+            "4. For semantic queries ('why', 'find documents about X'): call query_vector_search_unifier.\n"
+            "5. For 'sync database' or 'update cache': call trigger_local_data_sync.\n"
+            "6. Report the HTTP status code and raw response if a tool fails so the user can debug.\n"
         )
 
         messages: list = [("system", system_prompt)]

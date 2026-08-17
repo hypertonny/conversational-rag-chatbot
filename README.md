@@ -1,6 +1,6 @@
 # 🏛️ Oracle Primavera Unifier RAG Dashboard & Conversational AI Chatbot
 
-An enterprise-grade Streamlit dashboard and Conversational AI RAG Chatbot for Oracle Primavera Unifier REST APIs v1, containerized and ready for **Dokploy** deployment.
+An enterprise-grade FastAPI portal and Conversational AI RAG Chatbot for Oracle Primavera Unifier REST APIs v1, containerized and ready for **Dokploy** deployment.
 
 ---
 
@@ -12,11 +12,11 @@ An enterprise-grade Streamlit dashboard and Conversational AI RAG Chatbot for Or
 - **🏗️ Project Business Processes**: Query project-specific processes like `Contract`, `Submittal`, `RFI`, and `Change Orders` (`/bp/records/{project_number}`).
 - **📎 Attachment Downloader**: Download document attachments directly from records (`/bp/record/file`).
 - **👥 User Administration**: Query Unifier system users (`/admin/user/get`).
-- **🤖 Conversational RAG AI Chatbot**:
-  - Automatically embeds fetched Unifier data into a local **ChromaDB** vector store using `sentence-transformers` (`all-MiniLM-L6-v2`).
-  - Supports both **Groq** (`llama-3.3-70b-versatile`) for ultra-fast LPU inference and **OpenAI** (`gpt-3.5-turbo` / `gpt-4o`).
-  - Open-ended conversational QA: answers specific queries based on database context, or general Primavera Unifier / project management questions.
-  - Floating chat bubble interface in bottom-right corner.
+- **🤖 Agentic RAG AI Chatbot**:
+  - Live agentic tools (`LangGraph` + `LangChain`) querying Unifier APIs on-demand with caching support.
+  - Supports both **Groq** (`llama-3.3-70b-versatile`) for ultra-fast inference and **OpenAI** (`gpt-3.5-turbo` / `gpt-4o`).
+  - Persistent SQLite chat history with multi-conversation management.
+  - Modern web SPA frontend interface with conversational AI chat.
 
 ---
 
@@ -61,8 +61,8 @@ source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 # 3. Install dependencies
 uv pip install -r requirements.txt
 
-# 4. Launch Streamlit dashboard
-streamlit run app.py
+# 4. Launch FastAPI server
+uvicorn server:app --reload --port 8501
 ```
 
 ---
@@ -78,10 +78,11 @@ docker run -p 8501:8501 --env-file .env unifier-dashboard
 
 ## 🛠️ Tech Stack
 
-- **Frontend/App**: Streamlit
+- **Backend**: FastAPI & Uvicorn
+- **Frontend SPA**: HTML5, CSS3, Vanilla JS
 - **API Client**: Python `requests`
-- **Vector DB**: ChromaDB
-- **Embeddings**: SentenceTransformers (`all-MiniLM-L6-v2`)
-- **LLM Orchestration**: LangChain & LangChain-Classic
+- **Database / Cache**: SQLite (`chats.db`) & ChromaDB
+- **LLM Orchestration**: LangChain & LangGraph
 - **LLM Providers**: Groq (`ChatGroq`) & OpenAI (`ChatOpenAI`)
 - **Containerization**: Docker, Docker Compose, Dokploy
+
