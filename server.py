@@ -77,17 +77,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global Cached Chatbot Engine instance
-chatbot_engine_cache: Dict[str, ChatbotEngine] = {}
-
 def get_engine(openai_key: Optional[str] = None, groq_key: Optional[str] = None) -> ChatbotEngine:
-    cache_key = f"{openai_key or ''}:{groq_key or ''}"
-    if cache_key not in chatbot_engine_cache:
-        chatbot_engine_cache[cache_key] = ChatbotEngine(
-            openai_api_key=openai_key if openai_key else None,
-            groq_api_key=groq_key if groq_key else None
-        )
-    return chatbot_engine_cache[cache_key]
+    return ChatbotEngine(
+        openai_api_key=openai_key if openai_key else None,
+        groq_api_key=groq_key if groq_key else None
+    )
 
 
 # --- PYDANTIC REQUEST MODELS ---
