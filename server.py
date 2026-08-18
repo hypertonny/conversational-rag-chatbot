@@ -153,10 +153,8 @@ class CustomRequestReq(BaseModel):
 class ChatReq(BaseModel):
     bearer_token: Optional[str] = ""
     base_url: Optional[str] = ""
-    openai_api_key: Optional[str] = ""
-    groq_api_key: Optional[str] = ""
     gemini_api_key: Optional[str] = ""
-    provider: Optional[str] = "groq"
+    provider: Optional[str] = "gemini"
     prompt: str
     chat_history: Optional[List[Dict[str, str]]] = []
     conversation_id: Optional[str] = None
@@ -376,10 +374,8 @@ def get_config():
     return {
         "default_bearer_token": os.getenv("UNIFIER_BEARER_TOKEN", ""),
         "default_base_url": os.getenv("UNIFIER_BASE_URL", UnifierClient.DEFAULT_BASE_URL),
-        "default_openai_key": os.getenv("OPENAI_API_KEY", ""),
-        "default_groq_key": os.getenv("GROQ_API_KEY", ""),
         "default_gemini_key": os.getenv("GEMINI_API_KEY", ""),
-        "default_llm_provider": os.getenv("LLM_PROVIDER", "groq").lower()
+        "default_llm_provider": os.getenv("LLM_PROVIDER", "gemini").lower()
     }
 
 

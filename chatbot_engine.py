@@ -64,13 +64,13 @@ class ChatbotEngine:
         self.gemini_api_key = gemini_api_key or os.getenv("GEMINI_API_KEY", "")
 
     def is_ready(self) -> bool:
-        return bool(self.openai_api_key or self.groq_api_key or self.gemini_api_key)
+        return bool(self.gemini_api_key or os.getenv("GEMINI_API_KEY", ""))
 
     def get_chat_response(
         self,
         user_query: str,
         chat_history: Optional[List[Dict[str, str]]] = None,
-        provider: str = "groq",
+        provider: str = "gemini",
         client: Any = None,
     ) -> str:
         if chat_history is None:
@@ -78,7 +78,7 @@ class ChatbotEngine:
 
         if not self.is_ready():
             return (
-                "Chatbot is not ready. Please provide a Groq, Gemini, or OpenAI API Key "
+                "Chatbot is not ready. Please provide a Google Gemini API Key "
                 "in the AI Chatbot Config section of the sidebar."
             )
 
