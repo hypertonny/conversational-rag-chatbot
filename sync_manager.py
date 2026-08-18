@@ -537,6 +537,56 @@ def query_cached_bp_records(project_number: str = "", bpname: str = "", record_n
     conn.close()
     return [dict(r) for r in rows]
 
+def query_records_cross_project(
+    status: str = "", bp_name: str = "", assigned_to: str = "",
+    keyword: str = "", project_number: str = "", limit: int = 50,
+) -> List[Dict[str, Any]]:
+    """Search cached BP records across ALL projects/BPs at once, unlike query_cached_bp_records
+    which requires a specific project+BP. Backs quick-action prompts like 'my open tasks'."""
+    conn = get_db_connection()
+    c = conn.cursor()
+    query = 'SELECT project_number, bp_name, record_no, title, status, creator, assigned_to FROM cached_bp_records WHERE 1=1'
+    params: list = []
+    if status:
+        query += ' AND status LIKE ?'
+        params.append(f'%{status}%')
+    if bp_name:
+        query += ' AND bp_name LIKE ?'
+        params.append(f'%{bp_name}%')
+    if assigned_to:
+        query += ' AND assigned_to LIKE ?'
+        params.append(f'%{assigned_to}%')
+    if project_number:
+        query += ' AND project_number = ?'
+        params.append(project_number)
+    if keyword:
+        query += ' AND (title LIKE ? OR raw_json LIKE ?)'
+        params.extend([f'%{keyword}%', f'%{keyword}%'])
+    query += ' ORDER BY project_number, bp_name LIMIT ?'
+    params.append(limit)
+    c.execute(query, params)
+    rows = c.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def query_records_status_summary(bp_name: str = "", project_number: str = "") -> List[Dict[str, Any]]:
+    """Record counts grouped by BP + status across projects, for health/bottleneck summaries."""
+    conn = get_db_connection()
+    c = conn.cursor()
+    query = 'SELECT bp_name, status, COUNT(*) as record_count FROM cached_bp_records WHERE 1=1'
+    params: list = []
+    if bp_name:
+        query += ' AND bp_name LIKE ?'
+        params.append(f'%{bp_name}%')
+    if project_number:
+        query += ' AND project_number = ?'
+        params.append(project_number)
+    query += ' GROUP BY bp_name, status ORDER BY bp_name, record_count DESC'
+    c.execute(query, params)
+    rows = c.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
 def query_vector_search(query_text: str, project_number: Optional[str] = None, bp_name: Optional[str] = None, n_results: int = 5) -> List[Dict[str, Any]]:
     col = get_vector_collection()
     if not col:

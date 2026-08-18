@@ -698,6 +698,64 @@ class ChatbotEngine:
                 "| `no_workflow` | Boolean flag indicating if BP is non-workflow |\n"
             )
 
+        # ── TOOL 15: Cross-Project Record Search ──────────────────────────────
+        @tool
+        def query_records_across_projects(status: str = "", bp_name: str = "", assigned_to: str = "", keyword: str = "", project_number: str = "") -> str:
+            """
+            Searches cached Business Process records across ALL projects and BPs at once.
+            Use for broad requests that don't name one specific project/BP, e.g. "my open
+            tasks", "all pending change orders", "risks and issues", "vendor records",
+            "draft records", "find records about X".
+            Args:
+                status: Optional status filter (e.g. 'Open', 'Pending', 'Draft', 'Closed'). Partial match.
+                bp_name: Optional BP name filter (e.g. 'Change Order', 'Risk', 'Vendor'). Partial match.
+                assigned_to: Optional assignee/creator name filter. Partial match.
+                keyword: Optional free-text match against record title and stored field data.
+                project_number: Optional single project number to scope the search.
+            """
+            try:
+                from sync_manager import query_records_cross_project
+                rows = query_records_cross_project(
+                    status=status, bp_name=bp_name, assigned_to=assigned_to,
+                    keyword=keyword, project_number=project_number, limit=50
+                )
+                if not rows:
+                    return "No matching records found in the local cache for those filters. Try triggering a sync or broadening the filters."
+                lines = [f"Found {len(rows)} record(s) (showing up to 50):", ""]
+                for r in rows:
+                    lines.append(
+                        f"  Project {r['project_number']} | {r['bp_name']} | #{r['record_no']} | "
+                        f"{r['title']} | Status: {r['status']} | Assigned: {r['assigned_to'] or 'n/a'}"
+                    )
+                return "\n".join(lines)
+            except Exception as e:
+                return f"Error searching records across projects: {e}"
+
+        # ── TOOL 16: Cross-Project Status Summary ──────────────────────────────
+        @tool
+        def query_records_status_summary(bp_name: str = "", project_number: str = "") -> str:
+            """
+            Returns record counts grouped by Business Process and status across projects.
+            Use for "project health summary", "workflow bottlenecks", "executive brief",
+            "weekly report" style requests. NOTE: cost, budget, and schedule/milestone
+            dates are NOT in this cached summary (they live in BP-specific custom fields
+            that vary per BP) — say that plainly rather than guessing numbers.
+            Args:
+                bp_name: Optional BP name filter (e.g. 'Change Order'). Partial match.
+                project_number: Optional single project number to scope the summary.
+            """
+            try:
+                from sync_manager import query_records_status_summary as _status_summary
+                rows = _status_summary(bp_name=bp_name, project_number=project_number)
+                if not rows:
+                    return "No cached records match those filters. Try triggering a sync or broadening the filters."
+                lines = ["BP / Status breakdown (record counts):", ""]
+                for r in rows:
+                    lines.append(f"  {r['bp_name']} — {r['status']}: {r['record_count']}")
+                return "\n".join(lines)
+            except Exception as e:
+                return f"Error summarizing record status: {e}"
+
         tools = [
             query_active_projects,            # GET  /admin/projectshell?Status=Active
             query_company_bp_catalog,          # GET  /admin/bps
@@ -713,6 +771,8 @@ class ChatbotEngine:
             query_vector_search_unifier,       # ChromaDB Vector Store Search
             trigger_local_data_sync,           # SQLite + ChromaDB Sync
             query_oracle_documentation_guides, # Official Oracle Unifier Docs & BP Schema Mapping
+            query_records_across_projects,     # Cross-project/BP record search (tasks, risks, vendors, drafts...)
+            query_records_status_summary,      # Cross-project status breakdown (health/bottleneck summaries)
         ]
 
         # ── Build LLM (Gemini only) ─────────────────────────────────────────
@@ -735,7 +795,7 @@ class ChatbotEngine:
             "You are a STRICT Oracle Primavera Unifier database assistant. "
             "Unifier is a construction project management platform.\n"
             "You ONLY answer questions about data stored in this Unifier database.\n\n"
-            "TOOLS AVAILABLE (14 live & cached tools — call them to get real data):\n"
+            "TOOLS AVAILABLE (16 live & cached tools — call them to get real data):\n"
             "  1.  query_active_projects — all active project shells (name, number, status, type)\n"
             "  2.  query_company_bp_catalog — list of all Company-level Business Processes\n"
             "  3.  query_project_bp_catalog(project_number) — BPs for a project\n"
@@ -749,7 +809,9 @@ class ChatbotEngine:
             "  11. query_full_database_summary — overview from all endpoints\n"
             "  12. query_vector_search_unifier(query) — FAST semantic vector search over cached records\n"
             "  13. trigger_local_data_sync — Sync remote Unifier data into local SQLite & ChromaDB\n"
-            "  14. query_oracle_documentation_guides — Returns official Oracle Unifier v26 documentation URLs & BP schema mappings\n\n"
+            "  14. query_oracle_documentation_guides — Returns official Oracle Unifier v26 documentation URLs & BP schema mappings\n"
+            "  15. query_records_across_projects(status, bp_name, assigned_to, keyword, project_number) — searches records across ALL projects/BPs at once, all args optional\n"
+            "  16. query_records_status_summary(bp_name, project_number) — record counts grouped by BP + status across projects, both args optional\n\n"
             "OFFICIAL ORACLE PRIMAVERA UNIFIER V26 REFERENCE GUIDES:\n"
             "  - Integration Interface Guide: https://docs.oracle.com/en/industries/construction-engineering/primavera-unifier/26/integration-interface/introduction-10280474a.html\n"
             "  - Data Reference Guide: http://docs.oracle.com/en/industries/construction-engineering/primavera-unifier/26/reference/introduction-10289477a.html\n"
@@ -775,6 +837,15 @@ class ChatbotEngine:
             "5. For semantic queries ('why', 'find documents about X'): call query_vector_search_unifier.\n"
             "6. For 'sync database' or 'update cache': call trigger_local_data_sync.\n"
             "7. For documentation, reference guides, uDesigner guide, integration guide, user guides, or BP schema field mapping: ALWAYS call query_oracle_documentation_guides.\n"
+            "8. BROAD / CROSS-PROJECT REQUESTS (do NOT refuse these): for requests that span all "
+            "projects/BPs instead of naming one — 'my tasks', 'open risks and issues', 'pending "
+            "change orders', 'vendor/contractor records', 'draft records', 'workflow bottlenecks', "
+            "'project health summary', 'executive brief', 'weekly report' — call "
+            "query_records_across_projects (record-level results) and/or query_records_status_summary "
+            "(counts by BP/status) instead of declining. If a request asks for figures this cache "
+            "doesn't have — cost, budget, dollar exposure, milestone/due dates — say plainly that "
+            "those aren't in the cached summary rather than inventing numbers; offer to look up a "
+            "specific project/BP/record instead if the user names one.\n"
         )
 
         messages: list = [("system", system_prompt)]
