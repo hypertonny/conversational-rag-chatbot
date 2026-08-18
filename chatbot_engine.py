@@ -864,6 +864,10 @@ class ChatbotEngine:
             "dollar exposure, milestone/due dates — say plainly that those aren't in the cached summary "
             "rather than inventing numbers; offer to look up a specific project/BP/record instead if the "
             "user names one.\n"
+            "10. PROJECT NAME RESOLUTION: When a user mentions a project by name (e.g. 'Datamato', 'OracleNewR'), "
+            "ALWAYS call query_active_projects to find its project number and details automatically. Never ask the user for "
+            "a project number if they provided a project name — look it up immediately. Once you have the project number, "
+            "use it for subsequent queries like query_project_bp_catalog(project_number) or query_project_users(project_number).\n"
         )
 
         messages: list = [("system", system_prompt)]
