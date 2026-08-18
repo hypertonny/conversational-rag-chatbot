@@ -45,3 +45,6 @@ chroma_db/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Playwright MCP snapshots can capture live credentials from form fields
+.playwright-mcp/
