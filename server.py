@@ -90,12 +90,8 @@ async def add_no_cache_headers(request, call_next):
         response.headers["Expires"] = "0"
     return response
 
-def get_engine(openai_key: Optional[str] = None, groq_key: Optional[str] = None, gemini_key: Optional[str] = None) -> ChatbotEngine:
-    return ChatbotEngine(
-        openai_api_key=openai_key if openai_key else None,
-        groq_api_key=groq_key if groq_key else None,
-        gemini_api_key=gemini_key if gemini_key else None
-    )
+def get_engine(gemini_key: Optional[str] = None) -> ChatbotEngine:
+    return ChatbotEngine(gemini_api_key=gemini_key or None)
 
 
 # --- PYDANTIC REQUEST MODELS ---
@@ -319,11 +315,7 @@ def chat(req: ChatReq):
     logger.info(f"Received chat request (provider: {req.provider}). Prompt length: {len(req.prompt)}")
     start_t = time.time()
     try:
-        engine = get_engine(
-            openai_key=req.openai_api_key or None,
-            groq_key=req.groq_api_key or None,
-            gemini_key=req.gemini_api_key or None
-        )
+        engine = get_engine(gemini_key=req.gemini_api_key or None)
 
         client = None
         if req.bearer_token and req.bearer_token.strip():
@@ -351,7 +343,7 @@ def chat(req: ChatReq):
         answer = engine.get_chat_response(
             user_query=req.prompt,
             chat_history=req.chat_history or [],
-            provider=req.provider or "groq",
+            provider=req.provider or "gemini-2.5-flash-lite",
             client=client
         )
 

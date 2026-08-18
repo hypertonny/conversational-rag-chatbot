@@ -18,8 +18,6 @@ All confirmed Unifier REST v1 API endpoints covered:
 import os
 from typing import List, Dict, Any, Optional
 
-from langchain_groq import ChatGroq
-
 
 def _extract_records(data: Any) -> list:
     """Safely extract list of records from Unifier API response."""
@@ -53,14 +51,7 @@ def _format_record(r: dict, max_fields: int = 40) -> str:
 
 
 class ChatbotEngine:
-    def __init__(
-        self,
-        openai_api_key: Optional[str] = None,
-        groq_api_key: Optional[str] = None,
-        gemini_api_key: Optional[str] = None,
-    ):
-        self.openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY", "")
-        self.groq_api_key = groq_api_key or os.getenv("GROQ_API_KEY", "")
+    def __init__(self, gemini_api_key: Optional[str] = None):
         self.gemini_api_key = gemini_api_key or os.getenv("GEMINI_API_KEY", "")
 
     def is_ready(self) -> bool:
@@ -724,39 +715,18 @@ class ChatbotEngine:
             query_oracle_documentation_guides, # Official Oracle Unifier Docs & BP Schema Mapping
         ]
 
-        # ── Build LLM ────────────────────────────────────────────────────────
+        # ── Build LLM (Gemini only) ─────────────────────────────────────────
         try:
-            if provider == "groq":
-                if not self.groq_api_key:
-                    return "Groq API key is missing. Please add it in the AI Chatbot Config sidebar."
-                model_name = "llama-3.1-8b-instant"
-                llm = ChatGroq(
-                    model_name=model_name,
-                    temperature=0.1,
-                    groq_api_key=self.groq_api_key,
-                )
-            elif provider.startswith("gemini"):
-                if not self.gemini_api_key:
-                    return "Google Gemini API key is missing. Please add it in the AI Chatbot Config sidebar."
-                from langchain_google_genai import ChatGoogleGenerativeAI
-                # Default to gemini-2.5-flash-lite for 500 RPD / 250K TPM free tier limits
-                model_name = os.getenv("GEMINI_MODEL", provider if "-" in provider else "gemini-2.5-flash-lite")
-                llm = ChatGoogleGenerativeAI(
-                    model=model_name,
-                    temperature=0.1,
-                    google_api_key=self.gemini_api_key,
-                )
-            elif provider == "openai":
-                if not self.openai_api_key:
-                    return "OpenAI API key is missing. Please add it in the AI Chatbot Config sidebar."
-                from langchain_openai import ChatOpenAI
-                llm = ChatOpenAI(
-                    model="gpt-3.5-turbo",
-                    temperature=0.1,
-                    openai_api_key=self.openai_api_key,
-                )
-            else:
-                return f"Unknown provider '{provider}'. Choose 'groq', 'gemini', or 'openai'."
+            if not self.gemini_api_key:
+                return "Google Gemini API key is missing. Please add it in the AI Chatbot Config sidebar."
+            from langchain_google_genai import ChatGoogleGenerativeAI
+            # Default to gemini-2.5-flash-lite for 500 RPD / 250K TPM free tier limits
+            model_name = os.getenv("GEMINI_MODEL", provider if provider.startswith("gemini") else "gemini-2.5-flash-lite")
+            llm = ChatGoogleGenerativeAI(
+                model=model_name,
+                temperature=0.1,
+                google_api_key=self.gemini_api_key,
+            )
         except Exception as e:
             return f"Failed to initialise LLM: {e}"
 
