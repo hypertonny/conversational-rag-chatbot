@@ -129,6 +129,15 @@ code, textarea.code-font {
     box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
 }
 
+/* Native <option> popups default to the OS theme (light bg/dark text), which
+   bleeds through as washed-out/overlapping against this dark UI. Chromium and
+   Firefox honor color/background-color on <option>, unlike the rest of the
+   native dropdown chrome, so this is the portable fix without a custom widget. */
+.form-control option {
+    background-color: var(--bg-card);
+    color: var(--text-main);
+}
+
 .input-with-icon {
     position: relative;
     display: flex;
