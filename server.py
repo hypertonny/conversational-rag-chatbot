@@ -95,6 +95,20 @@ def get_engine(gemini_key: Optional[str] = None) -> ChatbotEngine:
     return ChatbotEngine(gemini_api_key=gemini_key or None)
 
 
+@app.on_event("startup")
+def _startup_sync():
+    """Auto-populate the local SQLite cache + vector store from Unifier on boot, so the
+    chatbot has real data to answer from immediately instead of needing a manual sync
+    trigger — especially important since the cache doesn't reliably survive a redeploy."""
+    token = os.getenv("UNIFIER_BEARER_TOKEN", "")
+    if not token:
+        logger.info("UNIFIER_BEARER_TOKEN not set — skipping startup sync.")
+        return
+    url = os.getenv("UNIFIER_BASE_URL", UnifierClient.DEFAULT_BASE_URL)
+    import threading
+    threading.Thread(target=_run_background_sync, args=(token, url), daemon=True).start()
+
+
 # --- PYDANTIC REQUEST MODELS ---
 
 class TestConnectionReq(BaseModel):
