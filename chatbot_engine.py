@@ -739,7 +739,7 @@ class ChatbotEngine:
                 if not self.gemini_api_key:
                     return "Google Gemini API key is missing. Please add it in the AI Chatbot Config sidebar."
                 from langchain_google_genai import ChatGoogleGenerativeAI
-                model_name = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+                model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
                 llm = ChatGoogleGenerativeAI(
                     model=model_name,
                     temperature=0.1,
