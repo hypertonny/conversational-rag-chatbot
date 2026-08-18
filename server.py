@@ -166,7 +166,7 @@ class ChatReq(BaseModel):
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok", "app": "Primavera Unifier Custom Web Portal", "version": "2.0.0"}
+    return {"status": "ok", "app": "Primavera Unifier Custom Web Portal", "version": "2.2.0-gemini"}
 
 @app.post("/api/test-connection")
 def test_connection(req: TestConnectionReq):
