@@ -59,9 +59,9 @@ class ChatbotEngine:
         groq_api_key: Optional[str] = None,
         gemini_api_key: Optional[str] = None,
     ):
-        self.openai_api_key = openai_api_key or ""
-        self.groq_api_key = groq_api_key or ""
-        self.gemini_api_key = gemini_api_key or ""
+        self.openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY", "")
+        self.groq_api_key = groq_api_key or os.getenv("GROQ_API_KEY", "")
+        self.gemini_api_key = gemini_api_key or os.getenv("GEMINI_API_KEY", "")
 
     def is_ready(self) -> bool:
         return bool(self.openai_api_key or self.groq_api_key or self.gemini_api_key)
