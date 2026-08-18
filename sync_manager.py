@@ -124,12 +124,30 @@ def get_vector_collection():
     if _vector_collection is None:
         try:
             import chromadb
+            from chromadb.utils import embedding_functions
+            st_ef = embedding_functions.SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
             client = chromadb.PersistentClient(path=CHROMA_DIR)
-            _vector_collection = client.get_or_create_collection(
-                name="unifier_knowledge_base",
-                metadata={"hnsw:space": "cosine"}
-            )
-            logger.info("Initialized ChromaDB vector collection 'unifier_knowledge_base'")
+            try:
+                _vector_collection = client.get_or_create_collection(
+                    name="unifier_knowledge_base",
+                    embedding_function=st_ef,
+                    metadata={"hnsw:space": "cosine"}
+                )
+            except Exception as ef_err:
+                if "Embedding function conflict" in str(ef_err) or "already exists" in str(ef_err):
+                    logger.info("Migrating existing ChromaDB collection to SentenceTransformerEmbeddingFunction...")
+                    try:
+                        client.delete_collection(name="unifier_knowledge_base")
+                    except Exception:
+                        pass
+                    _vector_collection = client.get_or_create_collection(
+                        name="unifier_knowledge_base",
+                        embedding_function=st_ef,
+                        metadata={"hnsw:space": "cosine"}
+                    )
+                else:
+                    raise ef_err
+            logger.info("Initialized ChromaDB vector collection 'unifier_knowledge_base' with SentenceTransformerEmbeddingFunction ('all-MiniLM-L6-v2')")
         except Exception as e:
             logger.warning(f"Could not initialize ChromaDB vector collection: {e}")
             _vector_collection = None
@@ -466,15 +484,33 @@ class SyncManager:
         p_ok, p_cnt, p_msg = self.sync_projects()
         summary["projects"] = {"success": p_ok, "count": p_cnt, "message": p_msg}
 
-        # 2. Company BPs
+        # 2. Company BPs (catalog)
         cbp_ok, cbp_cnt, cbp_msg = self.sync_company_bps()
         summary["company_bps"] = {"success": cbp_ok, "count": cbp_cnt, "message": cbp_msg}
 
-        # 3. Users
+        # 3. Company BP records -- bounded by BP count (tens), unlike project-level records
+        # which would mean one sync per project (infeasible at project-catalog scale, e.g.
+        # tens of thousands of shells). query_project_bp_records already covers a named
+        # project on demand via the live API, so it's intentionally left out of the full sync.
+        cbr_total = 0
+        cbr_errors: List[str] = []
+        if cbp_ok:
+            conn = get_db_connection()
+            bp_names = [r["bp_name"] for r in conn.execute("SELECT bp_name FROM cached_company_bps").fetchall()]
+            conn.close()
+            for bp_name in bp_names:
+                ok, cnt, msg = self.sync_company_bp_records(bp_name)
+                if ok:
+                    cbr_total += cnt
+                else:
+                    cbr_errors.append(msg)
+        summary["company_bp_records"] = {"success": not cbr_errors, "count": cbr_total, "errors": cbr_errors[:5]}
+
+        # 4. Users
         u_ok, u_cnt, u_msg = self.sync_users()
         summary["users"] = {"success": u_ok, "count": u_cnt, "message": u_msg}
 
-        total_records = p_cnt + cbp_cnt + u_cnt
+        total_records = p_cnt + cbp_cnt + cbr_total + u_cnt
         elapsed_ms = (time.time() - start_t) * 1000
 
         conn = get_db_connection()
