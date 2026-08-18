@@ -418,14 +418,21 @@ document.addEventListener("DOMContentLoaded", () => {
     async function loadConversations() {
         try {
             const res = await fetch("/api/conversations");
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const convos = await res.json();
             chatHistoryList.innerHTML = "";
             convos.forEach(c => {
                 const div = document.createElement("div");
                 div.className = `history-item ${c.id === currentConversationId ? 'active' : ''}`;
-                div.innerHTML = `<i class="fa-regular fa-message"></i> ${c.title || "New Chat"}`;
+
+                const icon = document.createElement("i");
+                icon.className = "fa-regular fa-message";
+                div.appendChild(icon);
+                // Title is raw user prompt text — textContent, never innerHTML, or any
+                // visitor's sidebar renders whatever HTML the title-setter typed.
+                div.appendChild(document.createTextNode(` ${c.title || "New Chat"}`));
                 div.onclick = () => loadConversation(c.id, c.title);
-                
+
                 // Add delete button (hover effect handled via css or simple icon)
                 const delBtn = document.createElement("i");
                 delBtn.className = "fa-solid fa-trash";
@@ -434,7 +441,13 @@ document.addEventListener("DOMContentLoaded", () => {
                 delBtn.onclick = async (e) => {
                     e.stopPropagation();
                     if(confirm("Delete this chat?")) {
-                        await fetch(`/api/conversations/${c.id}`, { method: "DELETE" });
+                        try {
+                            const delRes = await fetch(`/api/conversations/${c.id}`, { method: "DELETE" });
+                            if (!delRes.ok) throw new Error(`HTTP ${delRes.status}`);
+                        } catch (delErr) {
+                            alert(`Failed to delete chat: ${delErr.message}`);
+                            return;
+                        }
                         if(currentConversationId === c.id) {
                             startNewChat();
                         } else {
@@ -447,6 +460,7 @@ document.addEventListener("DOMContentLoaded", () => {
             });
         } catch (e) {
             console.error("Failed to load conversations", e);
+            chatHistoryList.innerHTML = '<div class="history-item" style="opacity:0.6; cursor:default;">Failed to load chat history.</div>';
         }
     }
 
@@ -483,9 +497,17 @@ document.addEventListener("DOMContentLoaded", () => {
 
     btnNewChatFull.addEventListener("click", startNewChat);
 
+    const CHAT_TIMEOUT_MS = 60000;
+    let isSendingChat = false;
+
     async function sendChatMessageFull() {
+        if (isSendingChat) return; // ignore double-submits (Enter spam, pill clicks) while a request is in flight
         const text = chatInputFull.value.trim();
         if (!text) return;
+
+        isSendingChat = true;
+        chatInputFull.disabled = true;
+        btnSendChatFull.disabled = true;
 
         appendMessage("user", text);
         chatHistory.push({ role: "user", content: text });
@@ -493,10 +515,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const thinkingId = appendMessage("assistant", '<i class="fa-solid fa-spinner fa-spin"></i> Thinking...');
 
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
+
         try {
             const res = await fetch("/api/chat", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
+                signal: controller.signal,
                 body: JSON.stringify({
                     bearer_token: bearerToken.value.trim(),
                     base_url: getBaseUrl(),
@@ -507,24 +533,38 @@ document.addEventListener("DOMContentLoaded", () => {
                     conversation_id: currentConversationId
                 })
             });
-            const data = await res.json();
+
+            if (!res.ok) {
+                throw new Error(`Server error (HTTP ${res.status}). Please try again.`);
+            }
+
+            let data;
+            try {
+                data = await res.json();
+            } catch {
+                throw new Error("Server sent an invalid response. Please try again.");
+            }
             const answer = data.answer || "No response received.";
-            
+
             // If it's a new chat, the server returns the new ID
             if (data.conversation_id && !currentConversationId) {
                 currentConversationId = data.conversation_id;
             }
-            
-            chatHistory.push({ role: "assistant", content: answer });
 
-            const msgEl = document.getElementById(thinkingId);
-            if (msgEl) {
-                msgEl.innerHTML = marked.parse(answer);
-            }
+            chatHistory.push({ role: "assistant", content: answer });
+            setMessageContent(thinkingId, answer);
             loadConversations(); // refresh list to show updated titles/sorting
         } catch (err) {
-            const msgEl = document.getElementById(thinkingId);
-            if (msgEl) msgEl.innerText = `Error: ${err.message}`;
+            const message = err.name === "AbortError"
+                ? `Request timed out after ${CHAT_TIMEOUT_MS / 1000}s. Please try again.`
+                : err.message || "Something went wrong. Please try again.";
+            setMessageContent(thinkingId, message, /* isPlain */ true);
+        } finally {
+            clearTimeout(timeoutId);
+            isSendingChat = false;
+            chatInputFull.disabled = false;
+            btnSendChatFull.disabled = false;
+            chatInputFull.focus();
         }
     }
 
@@ -825,15 +865,45 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     btnSendChatFull.addEventListener("click", sendChatMessageFull);
-    chatInputFull.addEventListener("keypress", (e) => {
+    chatInputFull.addEventListener("keydown", (e) => {
         if (e.key === "Enter") sendChatMessageFull();
     });
+
+    // Renders LLM markdown to HTML, stripped of scripts/handlers so a prompt-injected
+    // or tool-sourced response can't execute in the viewer's browser.
+    function renderMarkdownSafe(content) {
+        if (typeof marked === "undefined") return escapeHtml(content);
+        const html = marked.parse(content);
+        return typeof DOMPurify !== "undefined" ? DOMPurify.sanitize(html) : escapeHtml(content);
+    }
+
+    function escapeHtml(str) {
+        const div = document.createElement("div");
+        div.textContent = str;
+        return div.innerHTML;
+    }
+
+    function setMessageContent(id, content, isPlain = false) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.innerHTML = isPlain ? escapeHtml(content) : renderMarkdownSafe(content);
+    }
 
     function appendMessage(role, content) {
         const id = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
         const div = document.createElement("div");
         div.className = `message ${role}`;
-        div.innerHTML = `<div id="${id}" class="message-content">${role === 'user' ? content : marked.parse(content)}</div>`;
+        const inner = document.createElement("div");
+        inner.id = id;
+        inner.className = "message-content";
+        // User text is never parsed as HTML — conversations are visible to any visitor
+        // (no per-user auth), so unescaped user input here would be a stored XSS.
+        if (role === "user") {
+            inner.textContent = content;
+        } else {
+            inner.innerHTML = renderMarkdownSafe(content);
+        }
+        div.appendChild(inner);
         chatMessagesFull.appendChild(div);
         chatMessagesFull.scrollTop = chatMessagesFull.scrollHeight;
         return id;
