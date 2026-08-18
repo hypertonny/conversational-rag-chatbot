@@ -878,8 +878,18 @@ class ChatbotEngine:
         try:
             agent_executor = create_react_agent(llm, tools)
             response = agent_executor.invoke({"messages": messages})
-            last_msg = response.get("messages", [])[-1]
-            return str(last_msg.content) if hasattr(last_msg, "content") else str(last_msg)
+            result_messages = response.get("messages", [])
+            last_msg = result_messages[-1] if result_messages else None
+            content = str(last_msg.content) if last_msg is not None and getattr(last_msg, "content", None) else ""
+            if not content:
+                # Gemini occasionally ends the ReAct loop with an empty-content AIMessage
+                # right after a successful tool call. Fall back to the tool's own output
+                # instead of showing nothing.
+                for msg in reversed(result_messages):
+                    if type(msg).__name__ == "ToolMessage" and getattr(msg, "content", None):
+                        content = str(msg.content)
+                        break
+            return content or "The assistant didn't return a response. Please try rephrasing your question."
         except Exception as e:
             err_str = str(e)
             if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
