@@ -34,7 +34,7 @@ RUN uv pip install --system -r requirements.txt
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
 
 # Copy application source code
-ARG CACHE_BUST=2.3.0
+ARG CACHE_BUST=2.4.0
 COPY . .
 
 # Expose web server port

@@ -735,11 +735,12 @@ class ChatbotEngine:
                     temperature=0.1,
                     groq_api_key=self.groq_api_key,
                 )
-            elif provider == "gemini":
+            elif provider.startswith("gemini"):
                 if not self.gemini_api_key:
                     return "Google Gemini API key is missing. Please add it in the AI Chatbot Config sidebar."
                 from langchain_google_genai import ChatGoogleGenerativeAI
-                model_name = os.getenv("GEMINI_MODEL", "gemini-1.5-flash-latest")
+                # Default to gemini-2.5-flash-lite for 500 RPD / 250K TPM free tier limits
+                model_name = os.getenv("GEMINI_MODEL", provider if "-" in provider else "gemini-2.5-flash-lite")
                 llm = ChatGoogleGenerativeAI(
                     model=model_name,
                     temperature=0.1,
