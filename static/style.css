@@ -436,8 +436,10 @@ code, textarea.code-font {
 
 .chat-messages {
     flex: 1;
+    min-width: 0;
     padding: 16px;
     overflow-y: auto;
+    overflow-x: hidden;
     display: flex;
     flex-direction: column;
     gap: 12px;
@@ -447,6 +449,7 @@ code, textarea.code-font {
     display: flex;
     flex-direction: column;
     max-width: 95%;
+    min-width: 0;
 }
 
 .message.user { align-self: flex-end; }
@@ -457,6 +460,8 @@ code, textarea.code-font {
     border-radius: 12px;
     font-size: 13px;
     line-height: 1.4;
+    max-width: 100%;
+    overflow-x: auto; /* wide tables/code scroll inside the bubble instead of stretching the whole chat column */
 }
 
 .message.user .message-content {
@@ -661,6 +666,7 @@ code, textarea.code-font {
 
 .chatgpt-main {
     flex: 1;
+    min-width: 0; /* flex items default to min-width:auto, letting a wide table below force this column past the viewport */
     display: flex;
     flex-direction: column;
     background-color: var(--bg-primary);
