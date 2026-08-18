@@ -38,6 +38,8 @@ app = FastAPI(
 )
 
 # --- DATABASE SETUP ---
+DB_PATH = "chats.db"
+
 def get_chat_db_connection():
     conn = sqlite3.connect(DB_PATH, timeout=10.0)
     conn.execute("PRAGMA journal_mode=WAL;")
