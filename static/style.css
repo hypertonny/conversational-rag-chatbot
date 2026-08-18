@@ -476,6 +476,21 @@ code, textarea.code-font {
     border-bottom-left-radius: 2px;
 }
 
+/* .chat-controls-container, .quick-action-pills, .chat-input-area, .input-wrapper are
+   siblings of .chat-messages inside the same .chatgpt-main column flex container, so
+   they need the same min-width:0 fix or their own content (long pill labels, the
+   persona dropdowns) can force the whole chat column wider than the viewport. */
+.chat-controls-container,
+.chat-input-area,
+.input-wrapper {
+    min-width: 0;
+}
+
+.quick-action-pills {
+    min-width: 0;
+    flex-shrink: 1;
+}
+
 .chat-input-area {
     padding: 12px;
     background-color: #0f172a;
