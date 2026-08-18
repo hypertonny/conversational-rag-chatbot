@@ -24,7 +24,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(na
 logger = logging.getLogger("FastAPI_Server")
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
 from unifier_client import UnifierClient
@@ -77,6 +77,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def add_no_cache_headers(request, call_next):
+    response = await call_next(request)
+    # Ensure browsers and proxies never cache HTML, JS, or CSS
+    if request.url.path == "/" or request.url.path.endswith(".html") or request.url.path.startswith("/static"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0, private"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 def get_engine(openai_key: Optional[str] = None, groq_key: Optional[str] = None, gemini_key: Optional[str] = None) -> ChatbotEngine:
     return ChatbotEngine(
@@ -379,11 +389,19 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.get("/")
 def read_root():
-    return FileResponse(
-        "static/index.html",
-        headers={
-            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
-            "Pragma": "no-cache",
-            "Expires": "0"
-        }
-    )
+    index_path = "static/index.html"
+    if os.path.exists(index_path):
+        with open(index_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        ts = int(time.time())
+        content = content.replace('/static/style.css', f'/static/style.css?v={ts}')
+        content = content.replace('/static/app.js', f'/static/app.js?v={ts}')
+        return HTMLResponse(
+            content=content,
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0, private",
+                "Pragma": "no-cache",
+                "Expires": "0"
+            }
+        )
+    return FileResponse(index_path)
