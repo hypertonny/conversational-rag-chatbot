@@ -867,7 +867,12 @@ class ChatbotEngine:
         )
 
         messages: list = [("system", system_prompt)]
-        for msg in (chat_history or [])[-6:]:
+        history_msgs = list(chat_history or [])
+        # Avoid duplicating the current user_query if the frontend pushed it to chat_history before sending
+        if history_msgs and history_msgs[-1].get("role") == "user" and history_msgs[-1].get("content") == user_query:
+            history_msgs = history_msgs[:-1]
+
+        for msg in history_msgs[-8:]:
             role = "user" if msg.get("role") == "user" else "assistant"
             content = msg.get("content", "")
             if content:
