@@ -821,7 +821,14 @@ class ChatbotEngine:
             last_msg = response.get("messages", [])[-1]
             return str(last_msg.content) if hasattr(last_msg, "content") else str(last_msg)
         except Exception as e:
+            err_str = str(e)
+            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                return (
+                    "⚠️ **Google Gemini Rate Limit Reached (429 Resource Exhausted)**\n\n"
+                    "Your Gemini API Key has temporarily exceeded its requests-per-minute (RPM) or tokens-per-minute (TPM) quota.\n"
+                    "Please wait a few seconds and try again, or check your rate limits at [Google AI Studio](https://aistudio.google.com/)."
+                )
             return (
-                f"Agent error: {e}\n\n"
-                "If this is an API key error, check your Groq/OpenAI key in the sidebar."
+                f"Agent error: {err_str}\n\n"
+                "If this is an API key error, check your Gemini API key in the AI Chatbot Config sidebar."
             )
