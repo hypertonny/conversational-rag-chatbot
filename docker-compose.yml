@@ -12,12 +12,14 @@ services:
     environment:
       - UNIFIER_BEARER_TOKEN=${UNIFIER_BEARER_TOKEN:-}
       - UNIFIER_BASE_URL=${UNIFIER_BASE_URL:-https://us2.unifier.oraclecloud.com/consulting/test/ws/rest/service/v1}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - GROQ_API_KEY=${GROQ_API_KEY:-}
-      - LLM_PROVIDER=${LLM_PROVIDER:-groq}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
     volumes:
       - chroma_data:/app/chroma_db
+      - app_data:/app/data
 
 volumes:
   chroma_data:
+    driver: local
+  app_data:
     driver: local

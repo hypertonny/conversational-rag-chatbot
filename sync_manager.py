@@ -16,7 +16,8 @@ from typing import Dict, Any, Optional, List, Tuple, Union
 
 logger = logging.getLogger("SyncManager")
 
-DB_CACHE_PATH = "unifier_cache.db"
+os.makedirs("data", exist_ok=True)
+DB_CACHE_PATH = os.path.join("data", "unifier_cache.db")
 CHROMA_DIR = "chroma_db"
 
 def get_db_connection():

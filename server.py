@@ -38,7 +38,8 @@ app = FastAPI(
 )
 
 # --- DATABASE SETUP ---
-DB_PATH = "chats.db"
+os.makedirs("data", exist_ok=True)
+DB_PATH = os.path.join("data", "chats.db")
 
 def get_chat_db_connection():
     conn = sqlite3.connect(DB_PATH, timeout=10.0)
