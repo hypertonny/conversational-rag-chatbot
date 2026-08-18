@@ -57,12 +57,14 @@ class ChatbotEngine:
         self,
         openai_api_key: Optional[str] = None,
         groq_api_key: Optional[str] = None,
+        gemini_api_key: Optional[str] = None,
     ):
         self.openai_api_key = openai_api_key or ""
         self.groq_api_key = groq_api_key or ""
+        self.gemini_api_key = gemini_api_key or ""
 
     def is_ready(self) -> bool:
-        return bool(self.openai_api_key or self.groq_api_key)
+        return bool(self.openai_api_key or self.groq_api_key or self.gemini_api_key)
 
     def get_chat_response(
         self,
@@ -76,7 +78,7 @@ class ChatbotEngine:
 
         if not self.is_ready():
             return (
-                "Chatbot is not ready. Please provide a Groq or OpenAI API Key "
+                "Chatbot is not ready. Please provide a Groq, Gemini, or OpenAI API Key "
                 "in the AI Chatbot Config section of the sidebar."
             )
 
@@ -733,6 +735,16 @@ class ChatbotEngine:
                     temperature=0.1,
                     groq_api_key=self.groq_api_key,
                 )
+            elif provider == "gemini":
+                if not self.gemini_api_key:
+                    return "Google Gemini API key is missing. Please add it in the AI Chatbot Config sidebar."
+                from langchain_google_genai import ChatGoogleGenerativeAI
+                model_name = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+                llm = ChatGoogleGenerativeAI(
+                    model=model_name,
+                    temperature=0.1,
+                    google_api_key=self.gemini_api_key,
+                )
             elif provider == "openai":
                 if not self.openai_api_key:
                     return "OpenAI API key is missing. Please add it in the AI Chatbot Config sidebar."
@@ -743,7 +755,7 @@ class ChatbotEngine:
                     openai_api_key=self.openai_api_key,
                 )
             else:
-                return f"Unknown provider '{provider}'. Choose 'groq' or 'openai'."
+                return f"Unknown provider '{provider}'. Choose 'groq', 'gemini', or 'openai'."
         except Exception as e:
             return f"Failed to initialise LLM: {e}"
 

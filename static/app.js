@@ -14,8 +14,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const llmProvider = document.getElementById("llmProvider");
     const groqKeyGroup = document.getElementById("groqKeyGroup");
+    const geminiKeyGroup = document.getElementById("geminiKeyGroup");
     const openaiKeyGroup = document.getElementById("openaiKeyGroup");
     const groqApiKey = document.getElementById("groqApiKey");
+    const geminiApiKey = document.getElementById("geminiApiKey");
     const openaiApiKey = document.getElementById("openaiApiKey");
 
     // --- INITIALIZE CONFIG FROM BACKEND ---
@@ -25,6 +27,7 @@ document.addEventListener("DOMContentLoaded", () => {
             config = data;
             if (config.default_bearer_token) bearerToken.value = config.default_bearer_token;
             if (config.default_groq_key) groqApiKey.value = config.default_groq_key;
+            if (config.default_gemini_key) geminiApiKey.value = config.default_gemini_key;
             if (config.default_openai_key) openaiApiKey.value = config.default_openai_key;
             if (config.default_llm_provider) {
                 llmProvider.value = config.default_llm_provider;
@@ -60,9 +63,15 @@ document.addEventListener("DOMContentLoaded", () => {
         if (llmProvider.value === "openai") {
             openaiKeyGroup.style.display = "block";
             groqKeyGroup.style.display = "none";
+            geminiKeyGroup.style.display = "none";
+        } else if (llmProvider.value === "gemini") {
+            openaiKeyGroup.style.display = "none";
+            groqKeyGroup.style.display = "none";
+            geminiKeyGroup.style.display = "block";
         } else {
             openaiKeyGroup.style.display = "none";
             groqKeyGroup.style.display = "block";
+            geminiKeyGroup.style.display = "none";
         }
     }
 
@@ -512,6 +521,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     base_url: getBaseUrl(),
                     openai_api_key: openaiApiKey.value.trim(),
                     groq_api_key: groqApiKey.value.trim(),
+                    gemini_api_key: geminiApiKey ? geminiApiKey.value.trim() : "",
                     provider: llmProvider.value,
                     prompt: text,
                     chat_history: chatHistory,

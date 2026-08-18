@@ -78,10 +78,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def get_engine(openai_key: Optional[str] = None, groq_key: Optional[str] = None) -> ChatbotEngine:
+def get_engine(openai_key: Optional[str] = None, groq_key: Optional[str] = None, gemini_key: Optional[str] = None) -> ChatbotEngine:
     return ChatbotEngine(
         openai_api_key=openai_key if openai_key else None,
-        groq_api_key=groq_key if groq_key else None
+        groq_api_key=groq_key if groq_key else None,
+        gemini_api_key=gemini_key if gemini_key else None
     )
 
 
@@ -144,6 +145,7 @@ class ChatReq(BaseModel):
     base_url: Optional[str] = ""
     openai_api_key: Optional[str] = ""
     groq_api_key: Optional[str] = ""
+    gemini_api_key: Optional[str] = ""
     provider: Optional[str] = "groq"
     prompt: str
     chat_history: Optional[List[Dict[str, str]]] = []
@@ -307,7 +309,11 @@ def chat(req: ChatReq):
     logger.info(f"Received chat request (provider: {req.provider}). Prompt length: {len(req.prompt)}")
     start_t = time.time()
     try:
-        engine = get_engine(openai_key=req.openai_api_key or None, groq_key=req.groq_api_key or None)
+        engine = get_engine(
+            openai_key=req.openai_api_key or None,
+            groq_key=req.groq_api_key or None,
+            gemini_key=req.gemini_api_key or None
+        )
 
         client = None
         if req.bearer_token and req.bearer_token.strip():
@@ -362,6 +368,7 @@ def get_config():
         "default_base_url": os.getenv("UNIFIER_BASE_URL", UnifierClient.DEFAULT_BASE_URL),
         "default_openai_key": os.getenv("OPENAI_API_KEY", ""),
         "default_groq_key": os.getenv("GROQ_API_KEY", ""),
+        "default_gemini_key": os.getenv("GEMINI_API_KEY", ""),
         "default_llm_provider": os.getenv("LLM_PROVIDER", "groq").lower()
     }
 

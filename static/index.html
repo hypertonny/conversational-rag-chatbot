@@ -67,6 +67,7 @@
                     <label>LLM Provider</label>
                     <select id="llmProvider" class="form-control">
                         <option value="groq">Groq (Ultra-Fast LPU)</option>
+                        <option value="gemini">Google Gemini AI</option>
                         <option value="openai">OpenAI (GPT-3.5/4o)</option>
                     </select>
                 </div>
@@ -74,6 +75,11 @@
                 <div class="form-group" id="groqKeyGroup">
                     <label>Groq API Key</label>
                     <input type="password" id="groqApiKey" class="form-control" placeholder="gsk_...">
+                </div>
+
+                <div class="form-group" id="geminiKeyGroup" style="display: none;">
+                    <label>Gemini API Key</label>
+                    <input type="password" id="geminiApiKey" class="form-control" placeholder="AIzaSy...">
                 </div>
 
                 <div class="form-group" id="openaiKeyGroup" style="display: none;">
