@@ -36,7 +36,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
 
 # Copy application source code
-ARG CACHE_BUST=2.2.0
+ARG CACHE_BUST=2.3.0
 COPY . .
 
 # Expose web server port
