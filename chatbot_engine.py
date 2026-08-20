@@ -98,12 +98,38 @@ class ChatbotEngine:
         @tool
         def query_active_projects() -> str:
             """
-            Fetches ALL active project shells from Primavera Unifier.
-            First checks local SQLite cache for instant response, falls back to live API.
+            Fetches ALL active project shells from Primavera Unifier live API.
             Returns total count, project names, numbers, status, type.
             """
             try:
-                # 1. Try local SQLite cache first (instant <5ms)
+                # 1. Live API (primary)
+                if client is not None:
+                    success, data, status_code, _ = client.get_active_projects()
+                    if success:
+                        records = _extract_records(data)
+                        total = len(records)
+                        if total == 0:
+                            return "No active projects found in the database."
+
+                        field_keys = list(records[0].keys()) if isinstance(records[0], dict) else []
+                        lines = [
+                            f"Total active projects (live API): {total}",
+                            f"Available fields per project: {', '.join(field_keys)}",
+                            "",
+                            "Project listing (first 50):"
+                        ]
+                        for i, r in enumerate(records[:50]):
+                            if isinstance(r, dict):
+                                name = r.get("projectname") or r.get("name") or "N/A"
+                                num = r.get("projectnumber") or r.get("project_number") or "N/A"
+                                status = r.get("status") or r.get("projectstatus") or "N/A"
+                                ptype = r.get("type") or r.get("projecttype") or "N/A"
+                                lines.append(f"  {i+1}. Name: {name} | Number: {num} | Status: {status} | Type: {ptype}")
+                        if total > 50:
+                            lines.append(f"  ... and {total - 50} more projects.")
+                        return "\n".join(lines)
+
+                # 2. Fallback to local SQLite cache
                 try:
                     from sync_manager import get_db_connection
                     conn = get_db_connection()
@@ -113,44 +139,17 @@ class ChatbotEngine:
                     conn.close()
                     if rows:
                         lines = [
-                            f"Total active projects (local cache): {len(rows)}",
+                            f"Total active projects (local cache fallback): {len(rows)}",
                             "",
                             "Project listing:"
                         ]
                         for i, r in enumerate(rows[:50], 1):
                             lines.append(f"  {i}. Name: {r[1]} | Number: {r[0]} | Status: {r[2]} | Type: {r[3]}")
                         return "\n".join(lines)
-                except Exception as cache_err:
+                except Exception:
                     pass
 
-                # 2. Live API fallback
-                if client is None:
-                    return "No Unifier connection provided and no local cached projects available."
-                success, data, status_code, _ = client.get_active_projects()
-                if not success:
-                    return f"Active Projects API failed (HTTP {status_code}): {data}"
-                records = _extract_records(data)
-                total = len(records)
-                if total == 0:
-                    return "No active projects found in the database."
-
-                field_keys = list(records[0].keys()) if isinstance(records[0], dict) else []
-                lines = [
-                    f"Total active projects: {total}",
-                    f"Available fields per project: {', '.join(field_keys)}",
-                    "",
-                    "Project listing (first 50):"
-                ]
-                for i, r in enumerate(records[:50]):
-                    if isinstance(r, dict):
-                        name = r.get("projectname") or r.get("name") or "N/A"
-                        num = r.get("projectnumber") or r.get("project_number") or "N/A"
-                        status = r.get("status") or r.get("projectstatus") or "N/A"
-                        ptype = r.get("type") or r.get("projecttype") or "N/A"
-                        lines.append(f"  {i+1}. Name: {name} | Number: {num} | Status: {status} | Type: {ptype}")
-                if total > 50:
-                    lines.append(f"  ... and {total - 50} more projects.")
-                return "\n".join(lines)
+                return "No active projects could be retrieved from the Unifier API."
             except Exception as e:
                 return f"Error querying active projects: {e}"
 
@@ -158,11 +157,36 @@ class ChatbotEngine:
         @tool
         def query_company_bp_catalog() -> str:
             """
-            Fetches master list of all Company-level Business Processes (BPs) in Unifier.
-            First checks local SQLite cache for instant response, falls back to live API.
+            Fetches master list of all Company-level Business Processes (BPs) in Unifier live API.
             """
             try:
-                # 1. Try local SQLite cache first
+                # 1. Live API (primary)
+                if client is not None:
+                    success, data, status_code, _ = client.get_company_bp_list()
+                    if success:
+                        records = _extract_records(data)
+                        total = len(records)
+                        if total == 0:
+                            return "No Company Business Processes found."
+
+                        field_keys = list(records[0].keys()) if isinstance(records[0], dict) else []
+                        lines = [
+                            f"Total Company Business Processes (live API): {total}",
+                            f"Available fields: {', '.join(field_keys)}",
+                            "",
+                            "Full BP list:"
+                        ]
+                        for i, r in enumerate(records):
+                            if isinstance(r, dict):
+                                bp_name = r.get("bp_name") or r.get("bp_model_name") or str(r)
+                                model = r.get("bp_model_name") or ""
+                                source = r.get("studio_source") or r.get("source") or ""
+                                extra = f" | Model: {model}" if model else ""
+                                extra += f" | Source: {source}" if source else ""
+                                lines.append(f"  {i+1}. {bp_name}{extra}")
+                        return "\n".join(lines)
+
+                # 2. Fallback to local SQLite cache
                 try:
                     from sync_manager import get_db_connection
                     conn = get_db_connection()
@@ -172,7 +196,7 @@ class ChatbotEngine:
                     conn.close()
                     if rows:
                         lines = [
-                            f"Total Company Business Processes (local cache): {len(rows)}",
+                            f"Total Company Business Processes (local cache fallback): {len(rows)}",
                             "",
                             "Full BP list:"
                         ]
@@ -182,33 +206,7 @@ class ChatbotEngine:
                 except Exception:
                     pass
 
-                # 2. Live API fallback
-                if client is None:
-                    return "No Unifier connection provided and no local cached BPs available."
-                success, data, status_code, _ = client.get_company_bp_list()
-                if not success:
-                    return f"Company BP Catalog API failed (HTTP {status_code}): {data}"
-                records = _extract_records(data)
-                total = len(records)
-                if total == 0:
-                    return "No Company Business Processes found."
-
-                field_keys = list(records[0].keys()) if isinstance(records[0], dict) else []
-                lines = [
-                    f"Total Company Business Processes: {total}",
-                    f"Available fields: {', '.join(field_keys)}",
-                    "",
-                    "Full BP list:"
-                ]
-                for i, r in enumerate(records):
-                    if isinstance(r, dict):
-                        bp_name = r.get("bp_name") or r.get("bp_model_name") or str(r)
-                        model = r.get("bp_model_name") or ""
-                        source = r.get("studio_source") or r.get("source") or ""
-                        extra = f" | Model: {model}" if model else ""
-                        extra += f" | Source: {source}" if source else ""
-                        lines.append(f"  {i+1}. {bp_name}{extra}")
-                return "\n".join(lines)
+                return "No Company Business Processes available from the Unifier API."
             except Exception as e:
                 return f"Error querying company BP catalog: {e}"
 
@@ -251,7 +249,32 @@ class ChatbotEngine:
                 bpname: The exact BP name (e.g. 'Vendor', 'Contract', 'RFI').
             """
             try:
-                # 1. Check local cache first
+                # 1. Live API (primary)
+                if client is not None:
+                    success, data, status_code, _ = client.get_company_bp_records(bpname=bpname)
+                    if success:
+                        records = _extract_records(data)
+                        total = len(records)
+                        if total == 0:
+                            return f"No records found in Company BP '{bpname}'."
+
+                        field_keys = list(records[0].keys()) if isinstance(records[0], dict) else []
+                        lines = [
+                            f"Company BP '{bpname}' (live API): {total} total records",
+                            f"Fields available: {', '.join(field_keys)}",
+                            "",
+                            "Records (first 20):"
+                        ]
+                        for i, r in enumerate(records[:20]):
+                            if isinstance(r, dict):
+                                lines.append(f"  Record {i+1}: {_format_record(r)}")
+                            else:
+                                lines.append(f"  Record {i+1}: {r}")
+                        if total > 20:
+                            lines.append(f"  ... and {total - 20} more records.")
+                        return "\n".join(lines)
+
+                # 2. Fallback to local cache
                 try:
                     from sync_manager import get_db_connection
                     conn = get_db_connection()
@@ -260,39 +283,14 @@ class ChatbotEngine:
                     rows = c.fetchall()
                     conn.close()
                     if rows:
-                        lines = [f"Company BP '{bpname}' (local cache): {len(rows)} records found", ""]
+                        lines = [f"Company BP '{bpname}' (local cache fallback): {len(rows)} records found", ""]
                         for i, r in enumerate(rows[:20], 1):
                             lines.append(f"  Record {i}: #{r[0]} | Title: {r[1]} | Status: {r[2]} | Creator: {r[3]} | Assigned: {r[4]}")
                         return "\n".join(lines)
                 except Exception:
                     pass
 
-                # 2. Live API fallback
-                if client is None:
-                    return f"No Unifier connection provided and no local records cached for BP '{bpname}'."
-                success, data, status_code, _ = client.get_company_bp_records(bpname=bpname)
-                if not success:
-                    return f"Company BP Records API failed for BP '{bpname}' (HTTP {status_code}): {data}"
-                records = _extract_records(data)
-                total = len(records)
-                if total == 0:
-                    return f"No records found in Company BP '{bpname}'."
-
-                field_keys = list(records[0].keys()) if isinstance(records[0], dict) else []
-                lines = [
-                    f"Company BP '{bpname}': {total} total records",
-                    f"Fields available: {', '.join(field_keys)}",
-                    "",
-                    "Records (first 20):"
-                ]
-                for i, r in enumerate(records[:20]):
-                    if isinstance(r, dict):
-                        lines.append(f"  Record {i+1}: {_format_record(r)}")
-                    else:
-                        lines.append(f"  Record {i+1}: {r}")
-                if total > 20:
-                    lines.append(f"  ... and {total - 20} more records.")
-                return "\n".join(lines)
+                return f"No records found in Company BP '{bpname}'."
             except Exception as e:
                 return f"Error querying company BP records for '{bpname}': {e}"
 
@@ -332,7 +330,35 @@ class ChatbotEngine:
             Fetches ALL records inside a Business Process for a specific project/shell.
             """
             try:
-                # 1. Check local cache first
+                # 1. Live API (primary)
+                if client is not None:
+                    success, data, status_code, _ = client.get_project_bp_records(
+                        project_number=project_number,
+                        bpname=bpname
+                    )
+                    if success:
+                        records = _extract_records(data)
+                        total = len(records)
+                        if total == 0:
+                            return f"No records found in BP '{bpname}' for project '{project_number}'."
+
+                        field_keys = list(records[0].keys()) if isinstance(records[0], dict) else []
+                        lines = [
+                            f"Project '{project_number}' | BP '{bpname}' (live API): {total} total records",
+                            f"Fields available: {', '.join(field_keys)}",
+                            "",
+                            "Records (first 20):"
+                        ]
+                        for i, r in enumerate(records[:20]):
+                            if isinstance(r, dict):
+                                lines.append(f"  Record {i+1}: {_format_record(r)}")
+                            else:
+                                lines.append(f"  Record {i+1}: {r}")
+                        if total > 20:
+                            lines.append(f"  ... and {total - 20} more records.")
+                        return "\n".join(lines)
+
+                # 2. Fallback to local cache
                 try:
                     from sync_manager import get_db_connection
                     conn = get_db_connection()
@@ -341,42 +367,14 @@ class ChatbotEngine:
                     rows = c.fetchall()
                     conn.close()
                     if rows:
-                        lines = [f"Project '{project_number}' | BP '{bpname}' (local cache): {len(rows)} records found", ""]
+                        lines = [f"Project '{project_number}' | BP '{bpname}' (local cache fallback): {len(rows)} records found", ""]
                         for i, r in enumerate(rows[:20], 1):
                             lines.append(f"  Record {i}: #{r[0]} | Title: {r[1]} | Status: {r[2]} | Creator: {r[3]} | Assigned: {r[4]}")
                         return "\n".join(lines)
                 except Exception:
                     pass
 
-                # 2. Live API fallback
-                if client is None:
-                    return f"No Unifier connection provided and no local records cached for Project '{project_number}' BP '{bpname}'."
-                success, data, status_code, _ = client.get_project_bp_records(
-                    project_number=project_number,
-                    bpname=bpname
-                )
-                if not success:
-                    return f"Project BP Records API failed for project '{project_number}' BP '{bpname}' (HTTP {status_code}): {data}"
-                records = _extract_records(data)
-                total = len(records)
-                if total == 0:
-                    return f"No records found in BP '{bpname}' for project '{project_number}'."
-
-                field_keys = list(records[0].keys()) if isinstance(records[0], dict) else []
-                lines = [
-                    f"Project '{project_number}' | BP '{bpname}': {total} total records",
-                    f"Fields available: {', '.join(field_keys)}",
-                    "",
-                    "Records (first 20):"
-                ]
-                for i, r in enumerate(records[:20]):
-                    if isinstance(r, dict):
-                        lines.append(f"  Record {i+1}: {_format_record(r)}")
-                    else:
-                        lines.append(f"  Record {i+1}: {r}")
-                if total > 20:
-                    lines.append(f"  ... and {total - 20} more records.")
-                return "\n".join(lines)
+                return f"No records found in BP '{bpname}' for project '{project_number}'."
             except Exception as e:
                 return f"Error querying project BP records for project '{project_number}' BP '{bpname}': {e}"
 
@@ -415,10 +413,33 @@ class ChatbotEngine:
         def query_user_directory() -> str:
             """
             Fetches ALL users from the Unifier user administration directory.
-            Checks local SQLite cache first for instant response, falls back to live API.
             """
             try:
-                # 1. Try local SQLite cache first
+                # 1. Live API (primary)
+                if client is not None:
+                    success, data, status_code, _ = client.get_users()
+                    if success:
+                        records = _extract_records(data)
+                        total = len(records)
+                        if total == 0:
+                            return "No users found in Unifier directory."
+                        lines = [f"Total users in Unifier directory (live API): {total}", "", "User listing:"]
+                        for i, r in enumerate(records[:50], 1):
+                            if isinstance(r, dict):
+                                un = r.get("user_name") or r.get("username") or "N/A"
+                                fn = r.get("first_name") or ""
+                                ln = r.get("last_name") or ""
+                                full = f"{fn} {ln}".strip() or un
+                                em = r.get("email") or "N/A"
+                                st = r.get("status") or "Active"
+                                lines.append(f"  {i}. {full} ({un}) | Email: {em} | Status: {st}")
+                            else:
+                                lines.append(f"  {i}. {r}")
+                        if total > 50:
+                            lines.append(f"  ... and {total - 50} more users.")
+                        return "\n".join(lines)
+
+                # 2. Fallback to local SQLite cache
                 try:
                     from sync_manager import get_db_connection
                     conn = get_db_connection()
@@ -428,7 +449,7 @@ class ChatbotEngine:
                     conn.close()
                     if rows:
                         lines = [
-                            f"Total users in Unifier directory (local cache): {len(rows)}",
+                            f"Total users in Unifier directory (local cache fallback): {len(rows)}",
                             "",
                             "User listing:"
                         ]
@@ -439,37 +460,7 @@ class ChatbotEngine:
                 except Exception:
                     pass
 
-                # 2. Live API fallback
-                if client is None:
-                    return "No Unifier connection provided and no local users cached."
-                success, data, status_code, _ = client.get_users()
-                if not success:
-                    return (
-                        f"User Directory API failed (HTTP {status_code}): {data}\n"
-                        "Note: The /admin/user/get endpoint may require admin-level permissions on your Bearer Token."
-                    )
-
-                records = _extract_records(data)
-                total = len(records)
-
-                if total == 0:
-                    return f"User Directory returned 0 users."
-
-                field_keys = list(records[0].keys()) if isinstance(records[0], dict) else []
-                lines = [
-                    f"Total users in Unifier directory: {total}",
-                    f"User fields available: {', '.join(field_keys)}",
-                    "",
-                    "User listing (first 50):"
-                ]
-                for i, r in enumerate(records[:50]):
-                    if isinstance(r, dict):
-                        lines.append(f"  {i+1}: {_format_record(r, max_fields=10)}")
-                    else:
-                        lines.append(f"  {i+1}: {r}")
-                if total > 50:
-                    lines.append(f"  ... and {total - 50} more users.")
-                return "\n".join(lines)
+                return "User directory could not be retrieved from the Unifier API."
             except Exception as e:
                 return f"Error querying user directory: {e}"
 
