@@ -16,14 +16,46 @@ document.addEventListener("DOMContentLoaded", () => {
     const geminiKeyGroup = document.getElementById("geminiKeyGroup");
     const geminiApiKey = document.getElementById("geminiApiKey");
 
-    // --- INITIALIZE CONFIG FROM BACKEND ---
+    // --- INITIALIZE CONFIG FROM BACKEND (.env status only — secrets are NEVER sent to the browser) ---
     fetch("/api/config")
         .then(res => res.json())
         .then(data => {
             config = data;
-            if (config.default_bearer_token) bearerToken.value = config.default_bearer_token;
-            if (config.default_gemini_key) geminiApiKey.value = config.default_gemini_key;
-            if (llmProvider) llmProvider.value = "gemini";
+            // Credentials loaded from the server .env are kept server-side. We only learn
+            // whether they're set, and show that status instead of exposing the secret.
+            const btnUnlockToken = document.getElementById("btnUnlockToken");
+            if (config.bearer_token_set) {
+                bearerToken.value = "";
+                bearerToken.placeholder = "✓ Loaded from server environment";
+                bearerToken.disabled = true;
+                if (toggleTokenVisibility) toggleTokenVisibility.style.display = "none";
+                if (btnUnlockToken) {
+                    btnUnlockToken.style.display = "inline";
+                    btnUnlockToken.onclick = () => {
+                        bearerToken.disabled = false;
+                        bearerToken.placeholder = "Paste new Bearer Token to test...";
+                        bearerToken.focus();
+                        if (toggleTokenVisibility) toggleTokenVisibility.style.display = "flex";
+                        btnUnlockToken.style.display = "none";
+                    };
+                }
+            }
+            if (config.gemini_key_set && geminiApiKey) {
+                geminiApiKey.value = "";
+                geminiApiKey.placeholder = "✓ Loaded from server environment";
+                geminiApiKey.disabled = true;
+            }
+            if (llmProvider && config.default_gemini_model) {
+                // Add the .env model as an option if the dropdown doesn't have it
+                const model = config.default_gemini_model;
+                if (![...llmProvider.options].some(o => o.value === model)) {
+                    const opt = document.createElement("option");
+                    opt.value = model;
+                    opt.textContent = model;
+                    llmProvider.appendChild(opt);
+                }
+                llmProvider.value = model;
+            }
         })
         .catch(err => console.error("Error loading config:", err));
 
@@ -36,6 +68,14 @@ document.addEventListener("DOMContentLoaded", () => {
         } else {
             return "https://us2.unifier.oraclecloud.com/consulting/test/ws/rest/service/v1";
         }
+    }
+
+    // Credentials are "ready" if the user typed a token OR the server already has one in .env.
+    function credsReady() {
+        return !!(bearerToken.value.trim() || config.bearer_token_set);
+    }
+    function missingTokenMsg() {
+        return "No Bearer Token available. Enter one, or set UNIFIER_BEARER_TOKEN in the server .env.";
     }
 
     // --- EVENT LISTENERS ---
@@ -73,8 +113,8 @@ document.addEventListener("DOMContentLoaded", () => {
     // --- TEST CONNECTION ---
     btnTestConn.addEventListener("click", async () => {
         const token = bearerToken.value.trim();
-        if (!token) {
-            showStatus("Please enter a Bearer Token first.", "error");
+        if (!credsReady()) {
+            showStatus("No Bearer Token. Enter one, or set UNIFIER_BEARER_TOKEN in the server .env.", "error");
             return;
         }
         btnTestConn.disabled = true;
@@ -101,7 +141,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     function showStatus(msg, type) {
-        connStatus.innerHTML = `<span style="color: ${type === 'success' ? '#34d399' : '#f87171'}; font-weight:600;">${msg}</span>`;
+        connStatus.innerHTML = `<span style="color: #0a0a0a; font-weight:600;">${msg}</span>`;
     }
 
     // --- TABLE RENDER HELPER ---
@@ -169,7 +209,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // --- FETCH ACTIVE PROJECTS ---
     document.getElementById("btnFetchProjects").addEventListener("click", async () => {
         const token = bearerToken.value.trim();
-        if (!token) return alert("Please enter a Bearer Token.");
+        if (!credsReady()) return alert(missingTokenMsg());
         const resArea = document.getElementById("projectsResult");
         resArea.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Fetching active projects...';
 
@@ -191,7 +231,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // --- FETCH COMPANY BP CATALOG ---
     document.getElementById("btnFetchCompanyBPCatalog").addEventListener("click", async () => {
         const token = bearerToken.value.trim();
-        if (!token) return alert("Please enter a Bearer Token.");
+        if (!credsReady()) return alert(missingTokenMsg());
         const resArea = document.getElementById("companyBPCatalogResult");
         resArea.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Loading catalog...';
 
@@ -248,7 +288,7 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("btnFetchProjectBPCatalog").addEventListener("click", async () => {
         const token = bearerToken.value.trim();
         const projNo = document.getElementById("projCatNo").value.trim() || "001";
-        if (!token) return alert("Please enter a Bearer Token.");
+        if (!credsReady()) return alert(missingTokenMsg());
         const resArea = document.getElementById("projectBPCatalogResult");
         resArea.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Loading Project ${projNo} Catalog...`;
 
@@ -340,7 +380,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // --- FETCH USERS ---
     document.getElementById("btnFetchUsers").addEventListener("click", async () => {
         const token = bearerToken.value.trim();
-        if (!token) return alert("Please enter a Bearer Token.");
+        if (!credsReady()) return alert(missingTokenMsg());
         const resArea = document.getElementById("usersResult");
         resArea.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Querying user directory...';
 
@@ -366,7 +406,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // --- API EXPLORER ---
     document.getElementById("btnExecCustom").addEventListener("click", async () => {
         const token = bearerToken.value.trim();
-        if (!token) return alert("Please enter a Bearer Token.");
+        if (!credsReady()) return alert(missingTokenMsg());
         const resArea = document.getElementById("explorerResult");
         resArea.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Executing REST request...';
 
@@ -426,18 +466,24 @@ document.addEventListener("DOMContentLoaded", () => {
                 div.className = `history-item ${c.id === currentConversationId ? 'active' : ''}`;
 
                 const icon = document.createElement("i");
-                icon.className = "fa-regular fa-message";
+                icon.className = "fa-regular fa-message history-icon";
                 div.appendChild(icon);
-                // Title is raw user prompt text — textContent, never innerHTML, or any
-                // visitor's sidebar renders whatever HTML the title-setter typed.
-                div.appendChild(document.createTextNode(` ${c.title || "New Chat"}`));
+
+                // Title in a dedicated flexible span for proper text truncation
+                const titleSpan = document.createElement("span");
+                titleSpan.className = "history-item-title";
+                titleSpan.textContent = c.title || "New Chat";
+                div.appendChild(titleSpan);
+
                 div.onclick = () => loadConversation(c.id, c.title);
 
-                // Add delete button (hover effect handled via css or simple icon)
-                const delBtn = document.createElement("i");
-                delBtn.className = "fa-solid fa-trash";
-                delBtn.style.marginLeft = "auto";
-                delBtn.style.opacity = "0.5";
+                // Delete button with dedicated class (reveals smoothly on hover)
+                const delBtn = document.createElement("button");
+                delBtn.type = "button";
+                delBtn.className = "history-del-btn";
+                delBtn.title = "Delete chat";
+                delBtn.setAttribute("aria-label", "Delete chat");
+                delBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
                 delBtn.onclick = async (e) => {
                     e.stopPropagation();
                     if(confirm("Delete this chat?")) {
@@ -489,8 +535,16 @@ document.addEventListener("DOMContentLoaded", () => {
         chatHistory = [];
         chatTitleDisplay.innerText = "New Chat";
         chatMessagesFull.innerHTML = `
-            <div class="message assistant">
-                <div class="message-content">Hello! I am your Primavera Unifier AI Assistant. How can I help you today?</div>
+            <div class="chat-welcome">
+                <span class="chat-welcome-avatar"><i class="fa-solid fa-robot"></i></span>
+                <h3>How can I help with your Unifier data?</h3>
+                <p>Query active projects, business-process records, and the user directory in plain language. Pick a starter or type your own question.</p>
+                <div class="chat-welcome-chips">
+                    <button class="chat-chip" data-prompt="Show me the active projects.">Active projects</button>
+                    <button class="chat-chip" data-prompt="List all company-level business processes.">Company BPs</button>
+                    <button class="chat-chip" data-prompt="How many records are there per business process? Exact counts.">Record counts</button>
+                    <button class="chat-chip" data-prompt="Show me the Vendor records.">Vendor records</button>
+                </div>
             </div>`;
         loadConversations();
     }
@@ -513,7 +567,11 @@ document.addEventListener("DOMContentLoaded", () => {
         chatHistory.push({ role: "user", content: text });
         chatInputFull.value = "";
 
-        const thinkingId = appendMessage("assistant", '<i class="fa-solid fa-spinner fa-spin"></i> Thinking...');
+        const thinkingId = appendMessage("assistant", "");
+        const thinkingEl = document.getElementById(thinkingId);
+        if (thinkingEl) {
+            thinkingEl.innerHTML = '<span class="typing-dots" aria-label="Assistant is typing"><span></span><span></span><span></span></span>';
+        }
 
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), CHAT_TIMEOUT_MS);
@@ -864,6 +922,15 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     });
 
+    // Welcome-state starter chips (delegated — they are re-rendered on new chat)
+    chatMessagesFull.addEventListener("click", (e) => {
+        const chip = e.target.closest(".chat-chip");
+        if (chip && chip.dataset.prompt) {
+            chatInputFull.value = chip.dataset.prompt;
+            sendChatMessageFull();
+        }
+    });
+
     btnSendChatFull.addEventListener("click", sendChatMessageFull);
     chatInputFull.addEventListener("keydown", (e) => {
         if (e.key === "Enter") sendChatMessageFull();
@@ -891,8 +958,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function appendMessage(role, content) {
         const id = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-        const div = document.createElement("div");
-        div.className = `message ${role}`;
+        const row = document.createElement("div");
+        row.className = `message ${role}`;
+
+        const avatar = document.createElement("div");
+        avatar.className = "msg-avatar";
+        avatar.setAttribute("aria-hidden", "true");
+        avatar.innerHTML = role === "user"
+            ? '<i class="fa-solid fa-user"></i>'
+            : '<i class="fa-solid fa-robot"></i>';
+
         const inner = document.createElement("div");
         inner.id = id;
         inner.className = "message-content";
@@ -903,8 +978,27 @@ document.addEventListener("DOMContentLoaded", () => {
         } else {
             inner.innerHTML = renderMarkdownSafe(content);
         }
-        div.appendChild(inner);
-        chatMessagesFull.appendChild(div);
+
+        row.appendChild(avatar);
+        row.appendChild(inner);
+
+        if (role === "assistant") {
+            const copyBtn = document.createElement("button");
+            copyBtn.className = "msg-copy";
+            copyBtn.type = "button";
+            copyBtn.title = "Copy";
+            copyBtn.setAttribute("aria-label", "Copy message");
+            copyBtn.innerHTML = '<i class="fa-regular fa-copy"></i>';
+            copyBtn.addEventListener("click", () => {
+                navigator.clipboard?.writeText(inner.innerText || "").then(() => {
+                    copyBtn.innerHTML = '<i class="fa-solid fa-check"></i>';
+                    setTimeout(() => { copyBtn.innerHTML = '<i class="fa-regular fa-copy"></i>'; }, 1400);
+                }).catch(() => {});
+            });
+            row.appendChild(copyBtn);
+        }
+
+        chatMessagesFull.appendChild(row);
         chatMessagesFull.scrollTop = chatMessagesFull.scrollHeight;
         return id;
     }

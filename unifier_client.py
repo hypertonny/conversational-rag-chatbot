@@ -152,8 +152,12 @@ class UnifierClient:
             payload = custom_payload
         else:
             payload = {}
-            if filter_condition and filter_condition.strip():
-                payload["filterCondition"] = filter_condition.strip()
+            # Unifier's /admin/user/get REJECTS an empty filterCondition with
+            # {"status":811,"message":["Invalid Filter Condition."]} and returns 0 users.
+            # Default to all active users (uuu_user_status=1) so a plain "list users"
+            # actually returns the directory instead of an empty list.
+            cond = (filter_condition or "").strip() or "uuu_user_status=1"
+            payload["filterCondition"] = cond
 
         return self._send_request("POST", url, json_data=payload)
 

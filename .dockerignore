@@ -1,14 +1,21 @@
 .git
 .gitignore
 .venv
+.claude
 chroma_db
+data
+fahad data
 __pycache__
 *.pyc
 *.pyo
 *.pyd
+*.log
 .env
 .env.example
 README.md
 walkthrough.md
 implementation_plan.md
 task.md
+tests
+Primavera_Unifier_CSV_QA_GPT.md
+

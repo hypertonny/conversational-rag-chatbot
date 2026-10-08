@@ -10,11 +10,26 @@ import json
 import time
 import sqlite3
 import logging
+import threading
 
-from datetime import datetime
+from dotenv import load_dotenv
+
+load_dotenv()
+
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List, Tuple, Union
 
+from record_utils import extract_records as _extract_records, format_record_text as _format_record_text
+
 logger = logging.getLogger("SyncManager")
+
+
+def _utcnow() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+# Guards against two full syncs running at once (startup thread + manual trigger + scheduler).
+_sync_lock = threading.Lock()
 
 os.makedirs("data", exist_ok=True)
 DB_CACHE_PATH = os.path.join("data", "unifier_cache.db")
@@ -24,6 +39,7 @@ def get_db_connection():
     conn = sqlite3.connect(DB_CACHE_PATH, timeout=10.0)
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA busy_timeout=5000;")
+    conn.execute("PRAGMA foreign_keys=ON;")
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -135,8 +151,16 @@ def get_vector_collection():
                 )
             except Exception as ef_err:
                 if "Embedding function conflict" in str(ef_err) or "already exists" in str(ef_err):
-                    logger.info("Migrating existing ChromaDB collection to SentenceTransformerEmbeddingFunction...")
+                    logger.warning("ChromaDB embedding-function conflict: collection 'unifier_knowledge_base' "
+                                   "was built with a different embedding function. Attempting safe migration "
+                                   "(count logged before any delete).")
                     try:
+                        try:
+                            tmp = client.get_collection(name="unifier_knowledge_base")
+                            logger.warning(f"ChromaDB migration: existing collection holds {tmp.count()} vectors — "
+                                           f"deleting and rebuilding with all-MiniLM-L6-v2. Re-sync required to repopulate.")
+                        except Exception:
+                            pass
                         client.delete_collection(name="unifier_knowledge_base")
                     except Exception:
                         pass
@@ -152,28 +176,6 @@ def get_vector_collection():
             logger.warning(f"Could not initialize ChromaDB vector collection: {e}")
             _vector_collection = None
     return _vector_collection
-
-
-def _extract_records(data: Any) -> list:
-    if isinstance(data, list):
-        return data
-    if isinstance(data, dict):
-        for key in ("data", "records", "result", "results", "items"):
-            val = data.get(key)
-            if isinstance(val, list):
-                return val
-            if isinstance(val, dict):
-                return [val]
-        return [data]
-    return []
-
-
-def _format_record_text(r: dict) -> str:
-    parts = []
-    for k, v in r.items():
-        if isinstance(v, (str, int, float, bool)) and v:
-            parts.append(f"{k}: {v}")
-    return " | ".join(parts)
 
 
 class SyncManager:
@@ -195,7 +197,7 @@ class SyncManager:
             return False, 0, f"API error (HTTP {code}): {data}"
 
         records = _extract_records(data)
-        now = datetime.utcnow().isoformat()
+        now = _utcnow()
         conn = get_db_connection()
         c = conn.cursor()
 
@@ -261,7 +263,7 @@ class SyncManager:
             return False, 0, f"API error (HTTP {code}): {data}"
 
         records = _extract_records(data)
-        now = datetime.utcnow().isoformat()
+        now = _utcnow()
         conn = get_db_connection()
         c = conn.cursor()
 
@@ -302,7 +304,7 @@ class SyncManager:
             return False, 0, f"API error (HTTP {code}): {data}"
 
         records = _extract_records(data)
-        now = datetime.utcnow().isoformat()
+        now = _utcnow()
         conn = get_db_connection()
         c = conn.cursor()
 
@@ -370,7 +372,7 @@ class SyncManager:
             return False, 0, f"API error (HTTP {code}): {data}"
 
         records = _extract_records(data)
-        now = datetime.utcnow().isoformat()
+        now = _utcnow()
         conn = get_db_connection()
         c = conn.cursor()
 
@@ -438,20 +440,19 @@ class SyncManager:
             return False, 0, f"API error (HTTP {code}): {data}"
 
         records = _extract_records(data)
-        now = datetime.utcnow().isoformat()
+        now = _utcnow()
         conn = get_db_connection()
         c = conn.cursor()
 
+        from record_utils import normalize_user
         count = 0
+        vector_collection = get_vector_collection()
+        doc_ids, doc_texts, doc_metas = [], [], []
         for r in records:
             if not isinstance(r, dict):
                 continue
-            uname = str(r.get("user_name") or r.get("username") or r.get("email") or r.get("id") or "").strip()
-            fname = str(r.get("first_name") or "")
-            lname = str(r.get("last_name") or "")
-            email = str(r.get("email") or "")
-            status = str(r.get("status") or "Active")
-
+            u = normalize_user(r)
+            uname = u["login"] or u["email"] or u["name"]
             if not uname:
                 continue
 
@@ -465,69 +466,166 @@ class SyncManager:
                     status=excluded.status,
                     raw_json=excluded.raw_json,
                     last_synced_at=excluded.last_synced_at
-            ''', (uname, fname, lname, email, status, json.dumps(r), now))
+            ''', (uname, u["first_name"] or u["name"], u["last_name"], u["email"], u["status"], json.dumps(r), now))
             count += 1
+
+            # Index the user for semantic search too, so "who handles X" style questions hit people.
+            doc_ids.append(f"user_{uname}")
+            doc_texts.append(
+                f"User: {u['name']} | Login: {u['login']} | Email: {u['email']} | "
+                f"Title: {u['title']} | Company: {u['company']} | Status: {u['status']}"
+            )
+            doc_metas.append({"scope_type": "user", "login": u["login"], "email": u["email"]})
 
         conn.commit()
         conn.close()
+
+        if vector_collection and doc_ids:
+            try:
+                vector_collection.upsert(ids=doc_ids, documents=doc_texts, metadatas=doc_metas)
+            except Exception as e:
+                logger.warning(f"Vector upsert failed for users: {e}")
         elapsed_ms = (time.time() - start_t) * 1000
         return True, count, f"Synced {count} users in {elapsed_ms:.1f}ms"
 
-    def sync_all(self) -> Dict[str, Any]:
+    def sync_all_project_records(self, max_projects: Optional[int] = None) -> Tuple[int, int, List[str]]:
+        """Sync project-level BP records for cached projects x their BPs.
+
+        Returns (records_synced, projects_processed, errors). At real-world scale the
+        project catalog can be tens of thousands of shells, so each sweep is bounded by
+        ``max_projects`` (env SYNC_MAX_PROJECTS, default 250) and prioritizes the projects
+        with the FEWEST cached records first — so successive scheduled runs progressively
+        cover the whole catalog instead of re-doing the same head every time. Set
+        SYNC_MAX_PROJECTS=0 to sweep every project in one run (only for small catalogs).
+        Errors are collected, not raised, so one bad project/BP doesn't abort the sweep.
         """
-        Executes a complete sync across all Unifier endpoints into SQLite + ChromaDB.
-        """
-        start_t = time.time()
-        summary = {}
+        if max_projects is None:
+            try:
+                max_projects = int(os.getenv("SYNC_MAX_PROJECTS", "40"))
+            except ValueError:
+                max_projects = 40
+        try:
+            throttle_s = max(0, int(os.getenv("SYNC_THROTTLE_MS", "40"))) / 1000.0
+        except ValueError:
+            throttle_s = 0.04
 
-        # 1. Projects
-        p_ok, p_cnt, p_msg = self.sync_projects()
-        summary["projects"] = {"success": p_ok, "count": p_cnt, "message": p_msg}
-
-        # 2. Company BPs (catalog)
-        cbp_ok, cbp_cnt, cbp_msg = self.sync_company_bps()
-        summary["company_bps"] = {"success": cbp_ok, "count": cbp_cnt, "message": cbp_msg}
-
-        # 3. Company BP records -- bounded by BP count (tens), unlike project-level records
-        # which would mean one sync per project (infeasible at project-catalog scale, e.g.
-        # tens of thousands of shells). query_project_bp_records already covers a named
-        # project on demand via the live API, so it's intentionally left out of the full sync.
-        cbr_total = 0
-        cbr_errors: List[str] = []
-        if cbp_ok:
-            conn = get_db_connection()
-            bp_names = [r["bp_name"] for r in conn.execute("SELECT bp_name FROM cached_company_bps").fetchall()]
-            conn.close()
-            for bp_name in bp_names:
-                ok, cnt, msg = self.sync_company_bp_records(bp_name)
-                if ok:
-                    cbr_total += cnt
-                else:
-                    cbr_errors.append(msg)
-        summary["company_bp_records"] = {"success": not cbr_errors, "count": cbr_total, "errors": cbr_errors[:5]}
-
-        # 4. Users
-        u_ok, u_cnt, u_msg = self.sync_users()
-        summary["users"] = {"success": u_ok, "count": u_cnt, "message": u_msg}
-
-        total_records = p_cnt + cbp_cnt + cbr_total + u_cnt
-        elapsed_ms = (time.time() - start_t) * 1000
-
+        total = 0
+        errors: List[str] = []
         conn = get_db_connection()
-        c = conn.cursor()
-        c.execute('''
-            INSERT INTO sync_logs (sync_type, status, records_count, message, duration_ms, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', ("full_sync", "completed", total_records, json.dumps(summary), elapsed_ms, datetime.utcnow().isoformat()))
-        conn.commit()
+        sql = (
+            "SELECT p.project_number AS project_number FROM cached_projects p "
+            "LEFT JOIN cached_bp_records r ON r.project_number = p.project_number "
+            "GROUP BY p.project_number ORDER BY COUNT(r.id) ASC, p.project_number"
+        )
+        if max_projects and max_projects > 0:
+            sql += f" LIMIT {int(max_projects)}"
+        project_numbers = [row["project_number"] for row in conn.execute(sql).fetchall()]
+        try:
+            total_projects = int(conn.execute("SELECT COUNT(*) FROM cached_projects").fetchone()[0])
+        except Exception:
+            total_projects = len(project_numbers)
         conn.close()
 
-        return {
-            "success": True,
-            "total_records_synced": total_records,
-            "elapsed_ms": elapsed_ms,
-            "summary": summary
-        }
+        if total_projects > len(project_numbers):
+            logger.warning(f"Project-record sweep is capped: {len(project_numbers)}/{total_projects} projects this run "
+                           f"(SYNC_MAX_PROJECTS={max_projects}). Least-synced first, so successive runs cover the catalog; "
+                           f"set SYNC_MAX_PROJECTS=0 for a full sweep on small catalogs.")
+        else:
+            logger.info(f"Project-record sweep: {len(project_numbers)} project(s) this run (cap={max_projects or 'none'}).")
+        for idx, pnum in enumerate(project_numbers, 1):
+            if not self.client:
+                break
+            ok, bp_data, code, _ = self.client.get_project_bp_list(pnum)
+            if not ok:
+                errors.append(f"project {pnum} BP list HTTP {code}")
+                continue
+            bp_names = [str(r.get("bp_name") or r.get("bp_model_name") or "")
+                        for r in _extract_records(bp_data) if isinstance(r, dict)]
+            for bp_name in [b for b in bp_names if b]:
+                try:
+                    rec_ok, cnt, msg = self.sync_project_bp_records(pnum, bp_name)
+                    if rec_ok:
+                        total += cnt
+                    else:
+                        errors.append(msg)
+                except Exception as e:
+                    errors.append(f"project {pnum} BP {bp_name}: {e}")
+            if throttle_s:
+                time.sleep(throttle_s)  # yield the GIL so the web server stays responsive during a sweep
+            if idx % 25 == 0:
+                logger.info(f"Project-record sweep progress: {idx}/{len(project_numbers)} projects, {total} records.")
+        return total, len(project_numbers), errors
+
+    def sync_all(self) -> Dict[str, Any]:
+        """Complete sync across all Unifier endpoints into SQLite + ChromaDB.
+
+        Serialized by a process-wide lock so overlapping triggers (startup, manual,
+        scheduler) can't run concurrently and corrupt counts or thrash the API.
+        """
+        if not _sync_lock.acquire(blocking=False):
+            logger.info("sync_all skipped — a sync is already in progress.")
+            return {"success": False, "message": "A sync is already in progress.",
+                    "total_records_synced": 0, "elapsed_ms": 0}
+        try:
+            start_t = time.time()
+            summary = {}
+
+            # 1. Projects
+            p_ok, p_cnt, p_msg = self.sync_projects()
+            summary["projects"] = {"success": p_ok, "count": p_cnt, "message": p_msg}
+
+            # 2. Company BPs (catalog)
+            cbp_ok, cbp_cnt, cbp_msg = self.sync_company_bps()
+            summary["company_bps"] = {"success": cbp_ok, "count": cbp_cnt, "message": cbp_msg}
+
+            # 3. Company BP records (bounded by BP count)
+            cbr_total = 0
+            cbr_errors: List[str] = []
+            if cbp_ok:
+                conn = get_db_connection()
+                bp_names = [r["bp_name"] for r in conn.execute("SELECT bp_name FROM cached_company_bps").fetchall()]
+                conn.close()
+                for bp_name in bp_names:
+                    ok, cnt, msg = self.sync_company_bp_records(bp_name)
+                    if ok:
+                        cbr_total += cnt
+                    else:
+                        cbr_errors.append(msg)
+            summary["company_bp_records"] = {"success": not cbr_errors, "count": cbr_total, "errors": cbr_errors[:5]}
+
+            # 4. Users (fast) — sync the essential/fast data BEFORE the heavy sweep so the
+            #    app (directory, projects, company data) is usable within seconds.
+            u_ok, u_cnt, u_msg = self.sync_users()
+            summary["users"] = {"success": u_ok, "count": u_cnt, "message": u_msg}
+
+            # 5. Project-level BP records (heavy, throttled sweep) — LAST so it never delays
+            #    the core data landing; runs on the background thread yielding the GIL.
+            pbr_total, projects_processed, pbr_errors = self.sync_all_project_records()
+            summary["project_bp_records"] = {
+                "success": not pbr_errors, "count": pbr_total,
+                "projects_processed": projects_processed, "errors": pbr_errors[:5],
+            }
+
+            total_records = p_cnt + cbp_cnt + cbr_total + pbr_total + u_cnt
+            elapsed_ms = (time.time() - start_t) * 1000
+
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute('''
+                INSERT INTO sync_logs (sync_type, status, records_count, message, duration_ms, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', ("full_sync", "completed", total_records, json.dumps(summary), elapsed_ms, _utcnow()))
+            conn.commit()
+            conn.close()
+
+            return {
+                "success": True,
+                "total_records_synced": total_records,
+                "elapsed_ms": elapsed_ms,
+                "summary": summary
+            }
+        finally:
+            _sync_lock.release()
 
 
 # --- LOCAL QUERY HELPER FUNCTIONS FOR FAST CHATBOT RETRIEVAL ---
@@ -682,3 +780,45 @@ def get_sync_stats() -> Dict[str, Any]:
         "vector_embeddings": vec_cnt,
         "last_sync": dict(last_log) if last_log else None
     }
+
+
+# --- BACKGROUND SCHEDULER --------------------------------------------------
+_scheduler_thread: Optional[threading.Thread] = None
+
+
+def start_background_scheduler(token: str, url: Optional[str] = None) -> None:
+    """Start a daemon thread that runs a full sync every SYNC_INTERVAL_MIN minutes.
+
+    Idempotent: a second call is a no-op while a scheduler is already running. Set
+    SYNC_INTERVAL_MIN=0 to disable the recurring loop (a one-off startup sync still runs).
+    """
+    global _scheduler_thread
+    if not token:
+        logger.info("Scheduler not started — no bearer token.")
+        return
+    if _scheduler_thread and _scheduler_thread.is_alive():
+        return
+
+    try:
+        interval_min = int(os.getenv("SYNC_INTERVAL_MIN", "60"))
+    except ValueError:
+        interval_min = 60
+
+    def _loop():
+        from unifier_client import UnifierClient
+        base_url = url or os.getenv("UNIFIER_BASE_URL", UnifierClient.DEFAULT_BASE_URL)
+        while True:
+            try:
+                client = UnifierClient(bearer_token=token, base_url=base_url)
+                stats = SyncManager(client=client).sync_all()
+                logger.info(f"Scheduled sync complete: {stats.get('total_records_synced', 0)} records.")
+            except Exception as e:
+                logger.error(f"Scheduled sync error: {e}")
+            if interval_min <= 0:
+                logger.info("SYNC_INTERVAL_MIN<=0 — recurring scheduler disabled after one run.")
+                return
+            time.sleep(interval_min * 60)
+
+    _scheduler_thread = threading.Thread(target=_loop, name="unifier-sync-scheduler", daemon=True)
+    _scheduler_thread.start()
+    logger.info(f"Background sync scheduler started (every {interval_min} min).")

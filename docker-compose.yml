@@ -1,24 +1,52 @@
-version: '3.8'
-
 services:
+  # Dedicated Postgres + pgvector database for the Unifier RAG system
+  unifier-db:
+    image: pgvector/pgvector:pg16
+    container_name: unifier-db
+    restart: always
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-unifier}
+      - POSTGRES_USER=${POSTGRES_USER:-unifier}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-unifier_pass}
+    ports:
+      - "5435:5432"
+    volumes:
+      - unifier_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-unifier} -d ${POSTGRES_DB:-unifier}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
   unifier-dashboard:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: unifier-dashboard
     restart: always
+    depends_on:
+      unifier-db:
+        condition: service_healthy
     ports:
       - "8501:8501"
     environment:
       - UNIFIER_BEARER_TOKEN=${UNIFIER_BEARER_TOKEN:-}
       - UNIFIER_BASE_URL=${UNIFIER_BASE_URL:-https://us2.unifier.oraclecloud.com/consulting/test/ws/rest/service/v1}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash-lite}
       - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
+      - SYNC_INTERVAL_MIN=${SYNC_INTERVAL_MIN:-60}
+      - SYNC_MAX_PROJECTS=${SYNC_MAX_PROJECTS:-40}
+      # Dedicated Postgres + pgvector store (hybrid RAG)
+      - POSTGRES_DSN=${POSTGRES_DSN:-postgresql://unifier:unifier_pass@unifier-db:5432/unifier}
     volumes:
       - chroma_data:/app/chroma_db
       - app_data:/app/data
 
 volumes:
+  unifier_pg_data:
+    driver: local
   chroma_data:
     driver: local
   app_data:

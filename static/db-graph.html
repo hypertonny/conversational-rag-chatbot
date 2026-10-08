@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#ffffff">
+    <meta name="color-scheme" content="light">
+    <title>Unifier Database Graph</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+    <style>
+        :root{
+            --ink:#0a0a0a; --muted:#555; --line:#000; --bg:#fff; --soft:#f4f4f5;
+            --accent:#ea580c; --accent-ink:#c2410c;
+        }
+        *{box-sizing:border-box;margin:0;padding:0;}
+        body{font-family:'Inter',sans-serif;color:var(--ink);background:var(--bg);height:100vh;display:flex;flex-direction:column;overflow:hidden;}
+        header{display:flex;align-items:center;gap:16px;padding:12px 20px;border-bottom:1.5px solid var(--line);flex-wrap:wrap;}
+        header h1{font-family:'Outfit',sans-serif;font-size:18px;display:flex;align-items:center;gap:10px;}
+        header h1 .mark{width:30px;height:30px;border-radius:8px;background:var(--accent);color:#fff;display:grid;place-items:center;border:1px solid var(--accent-ink);}
+        .back{color:var(--ink);text-decoration:none;font-size:13px;font-weight:600;border:1px solid var(--line);border-radius:8px;padding:7px 12px;display:inline-flex;gap:6px;align-items:center;}
+        .back:hover{background:var(--soft);}
+        .spacer{flex:1;}
+        .field{display:flex;flex-direction:column;gap:3px;}
+        .field label{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:700;}
+        select{border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:13px;background:#fff;color:var(--ink);min-width:260px;}
+        .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);}
+        .legend span{display:inline-flex;align-items:center;gap:6px;}
+        .dot{width:12px;height:12px;border-radius:50%;border:1px solid var(--line);}
+        main{flex:1;display:flex;min-height:0;}
+        .stage{flex:1;position:relative;min-width:0;background:
+            radial-gradient(1200px 500px at 50% -10%, rgba(234,88,12,.05), transparent 70%), #fff;}
+        canvas{display:block;width:100%;height:100%;cursor:grab;}
+        canvas:active{cursor:grabbing;}
+        .hint{position:absolute;left:14px;bottom:12px;font-size:11px;color:var(--muted);background:#ffffffcc;border:1px solid var(--line);border-radius:8px;padding:5px 10px;}
+        .stats{position:absolute;left:14px;top:12px;display:flex;gap:8px;flex-wrap:wrap;}
+        .stat{background:#fff;border:1px solid var(--line);border-radius:9px;padding:7px 11px;font-size:12px;}
+        .stat b{font-family:'Outfit',sans-serif;font-size:16px;display:block;}
+        .stat .accent{color:var(--accent-ink);}
+        aside{width:340px;border-left:1.5px solid var(--line);padding:16px;overflow-y:auto;background:var(--soft);}
+        aside h2{font-family:'Outfit',sans-serif;font-size:15px;margin-bottom:4px;}
+        aside .sub{font-size:12px;color:var(--muted);margin-bottom:14px;}
+        .panel-empty{color:var(--muted);font-size:13px;line-height:1.6;}
+        .kv{display:flex;justify-content:space-between;font-size:13px;padding:6px 0;border-bottom:1px solid #ddd;}
+        .kv b{font-weight:600;}
+        .sec{margin-top:16px;}
+        .sec h3{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:8px;}
+        .bar{display:flex;align-items:center;gap:8px;margin:4px 0;font-size:12px;}
+        .bar .track{flex:1;height:8px;background:#e5e5e5;border-radius:4px;overflow:hidden;}
+        .bar .fill{height:100%;background:var(--accent);}
+        .chips{display:flex;flex-wrap:wrap;gap:5px;}
+        .chip{font-size:11px;border:1px solid var(--line);border-radius:6px;padding:3px 7px;background:#fff;font-family:'Consolas',monospace;overflow-wrap:anywhere;word-break:break-word;}
+        .chip.li{background:#fff7ed;border-color:var(--accent);}
+        button,.back,select{touch-action:manipulation;-webkit-tap-highlight-color:transparent;}
+        .back:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+        /* Responsive: stack canvas over panel; controls go full-width. No overlap at any size. */
+        @media (max-width: 900px){
+            body{overflow:auto;height:auto;min-height:100dvh;}
+            header{gap:10px;padding:10px 14px;padding-left:calc(14px + env(safe-area-inset-left));padding-right:calc(14px + env(safe-area-inset-right));}
+            header h1{font-size:16px;}
+            .field,.field select{width:100%;min-width:0;}
+            select{min-width:0;}
+            .spacer{display:none;}
+            main{flex-direction:column;}
+            .stage{min-height:52dvh;}
+            canvas{touch-action:pan-x pan-y;}
+            aside{width:100%;border-left:none;border-top:1.5px solid var(--line);max-height:46dvh;}
+            .stats{max-width:calc(100% - 28px);}
+            .hint{display:none;}
+        }
+        @media (pointer:coarse){
+            select,.back{font-size:16px;min-height:44px;}
+        }
+        @media (prefers-reduced-motion:reduce){
+            *{animation:none !important;transition:none !important;}
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1><span class="mark"><i class="fa-solid fa-diagram-project"></i></span> Unifier Database Graph</h1>
+        <a class="back" href="/"><i class="fa-solid fa-arrow-left"></i> Portal</a>
+        <a id="btnExportJson" class="back" href="/api/project/001/export" target="_blank" download="project_001_complete_context.json"><i class="fa-solid fa-download"></i> Export Project JSON</a>
+        <div class="field">
+            <label for="projectSelect">Focus Project</label>
+            <select id="projectSelect"><option>Loading…</option></select>
+        </div>
+        <div class="spacer"></div>
+        <div class="legend">
+            <span><i class="dot" style="background:#0a0a0a"></i> Company</span>
+            <span><i class="dot" style="background:#ea580c"></i> Project</span>
+            <span><i class="dot" style="background:#6b7280"></i> Hub</span>
+            <span><i class="dot" style="background:#fff"></i> Business Process</span>
+            <span><i class="dot" style="background:#d1d5db"></i> Entity</span>
+        </div>
+    </header>
+    <main>
+        <div class="stage">
+            <canvas id="graph"></canvas>
+            <div class="stats" id="stats"></div>
+            <div class="hint"><i class="fa-solid fa-hand-pointer"></i> Click a node with <b>+</b> to expand · drag to pan · scroll to zoom · drill down to record fields &amp; line items</div>
+        </div>
+        <aside id="panel">
+            <h2>Database Graph</h2>
+            <p class="sub" id="panelSub">Company → Project → Business Process → Record → Fields</p>
+            <p class="panel-empty">Click any <b>Business Process</b> node to inspect its record count, status breakdown, and the columns (fields) each record stores — including line-item sub-tables.</p>
+        </aside>
+    </main>
+    <script src="/static/db-graph.js"></script>
+</body>
+</html>

@@ -1,55 +1,191 @@
 """
-chatbot_engine.py — Agentic RAG Engine for Primavera Unifier Portal
+chatbot_engine.py — Orchestrator for the Primavera Unifier Agentic RAG chatbot.
 
-All confirmed Unifier REST v1 API endpoints covered:
+Thin coordinator: it compiles the LangGraph ReAct agent ONCE per (api key, model)
+and reuses it across requests. The per-request Unifier client and conversation
+memory are passed to the tools through a ContextVar (see agent_tools), and the
+resolved conversation slots are injected into the system prompt each turn.
 
-  ENDPOINT                                              METHOD  TOOL
-  /admin/projectshell?Status=Active                    GET     query_active_projects
-  /admin/bps                                           GET     query_company_bp_catalog
-  /admin/bps/{project_number}                          GET     query_project_bp_catalog
-  /bp/records/          (all records of a Company BP)  POST    query_company_bp_records
-  /bp/records/          (filtered by record_no)        POST    query_specific_company_bp_record  ← NEW
-  /bp/records/{project_number}  (all records)          POST    query_project_bp_records
-  /bp/records/{project_number}  (filtered)             POST    query_specific_project_bp_record  ← NEW
-  /admin/user/get                                      POST    query_user_directory
-  /admin/user/get       (with filterCondition)         POST    query_users_filtered              ← NEW
-  Summary across all endpoints                         —       query_full_database_summary
+Tool definitions live in agent_tools.py, the prompt in agent_prompts.py, and
+structured/semantic retrieval in retrieval.py.
 """
 import os
-from typing import List, Dict, Any, Optional
+import re
+import logging
+from typing import Any, Dict, List, Optional
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+logger = logging.getLogger("ChatbotEngine")
+
+RECURSION_LIMIT = 25          # hard cap on ReAct steps to prevent runaway loops
+MAX_HISTORY_TURNS = 6         # verbatim recent turns fed to the agent
+
+# ── Database-grounding guard ──────────────────────────────────────────────
+# Every number / record-id in the answer must be traceable to a tool result (or
+# the resolved-context block) THIS turn. Currency-aware: amounts carry their
+# currency label so "1000 JPY" never verifies against "$1000". Single-digit
+# monetary amounts (e.g. "$1", "€8") are still checked when they carry a
+# currency marker; bare single digits (list indices, "3 statuses") are ignored.
+_CODE_SPAN_RE = re.compile(r"`[^`]*`|```.*?```|_[^_\n]+_", re.DOTALL)
+_ID_RE = re.compile(r"\b[A-Za-z]{2,}-\d[\w.\-]*")
+_NUM_RE = re.compile(r"-?\d[\d,]*\.?\d*")
+_CUR_RE = re.compile(r"(USD|EUR|JPY|GBP|AED|SAR|\$|€|¥|£)", re.IGNORECASE)
 
 
-def _extract_records(data: Any) -> list:
-    """Safely extract list of records from Unifier API response."""
-    if isinstance(data, list):
-        return data
-    if isinstance(data, dict):
-        for key in ("data", "records", "result", "results", "items"):
-            val = data.get(key)
-            if isinstance(val, list):
-                return val
-            if isinstance(val, dict):
-                return [val]
-        return [data]
-    return []
+def _amounts_with_currency(text: str) -> set:
+    """Set of (rounded_value, currency_key) for every number in text.
+
+    currency_key is the normalized currency token found within 12 chars
+    before/after the number, or '' when none is present."""
+    out = set()
+    if not text:
+        return out
+    for m in _NUM_RE.finditer(text):
+        raw = m.group(0)
+        s = raw.replace(",", "")
+        if s in (".", "-", ""):
+            continue
+        try:
+            val = round(float(s), 2)
+        except ValueError:
+            continue
+        window = text[max(0, m.start() - 12):m.end() + 12]
+        cm = _CUR_RE.search(window)
+        cur = cm.group(1).upper() if cm else ""
+        # Normalize symbols to codes for comparison.
+        cur = {"$": "USD", "€": "EUR", "¥": "JPY", "£": "GBP"}.get(cur, cur)
+        out.add((val, cur))
+    return out
 
 
-def _format_record(r: dict, max_fields: int = 40) -> str:
-    """Format a single record dict into a readable pipe-separated string."""
-    parts = []
-    for i, (k, v) in enumerate(r.items()):
-        if i >= max_fields:
-            parts.append(f"... (+{len(r) - max_fields} more fields)")
-            break
-        if isinstance(v, dict):
-            parts.append(f"{k}: {{{', '.join(f'{dk}={dv}' for dk, dv in list(v.items())[:5])}}}")
-        elif isinstance(v, list):
-            parts.append(f"{k}: [{len(v)} items]")
+def _nums(text: str) -> set:
+    return {v for v, _ in _amounts_with_currency(text or "")}
+
+
+def _has_currency_marker(answer: str, start: int, end: int) -> bool:
+    window = answer[max(0, start - 12):end + 12]
+    return bool(_CUR_RE.search(window))
+
+
+def _answer_facts(answer: str):
+    """Return (data_numbers, record_ids) worth verifying (backward-compatible floats).
+
+    Single-digit numbers are kept ONLY when they carry a currency marker
+    (e.g. "$1"); bare digits like "3 statuses" are ignored."""
+    stripped = _CODE_SPAN_RE.sub(" ", answer or "")
+    ids = {m.upper() for m in _ID_RE.findall(stripped)}
+    # Drop record-ids before pulling numbers so 'INV-00002' doesn't yield a bogus 2.
+    no_ids = _ID_RE.sub(" ", stripped)
+    data_nums = set()
+    for m in _NUM_RE.finditer(no_ids):
+        raw = m.group(0)
+        s = raw.replace(",", "").rstrip(".")   # trailing sentence-period isn't a decimal point
+        if not s or s in ("-", "."):
+            continue
+        has_dec = bool(re.search(r"\.\d", s))
+        intpart = s.lstrip("-").split(".")[0]
+        if len(intpart) < 2 and not has_dec:
+            if not _has_currency_marker(no_ids, m.start(), m.end()):
+                continue
+        try:
+            data_nums.add(round(float(s), 2))
+        except ValueError:
+            pass
+    return data_nums, ids
+
+
+def _answer_amounts(answer: str) -> set:
+    """Currency-qualified amounts in an answer: set of (value, currency)."""
+    stripped = _CODE_SPAN_RE.sub(" ", answer or "")
+    no_ids = _ID_RE.sub(" ", stripped)
+    out = set()
+    for m in _NUM_RE.finditer(no_ids):
+        raw = m.group(0)
+        s = raw.replace(",", "").rstrip(".")
+        if not s or s in ("-", "."):
+            continue
+        has_dec = bool(re.search(r"\.\d", s))
+        intpart = s.lstrip("-").split(".")[0]
+        if len(intpart) < 2 and not has_dec:
+            if not _has_currency_marker(no_ids, m.start(), m.end()):
+                continue
+        try:
+            val = round(float(s), 2)
+        except ValueError:
+            continue
+        window = no_ids[max(0, m.start() - 12):m.end() + 12]
+        cm = _CUR_RE.search(window)
+        cur = cm.group(1).upper() if cm else ""
+        cur = {"$": "USD", "€": "EUR", "¥": "JPY", "£": "GBP"}.get(cur, cur)
+        out.add((val, cur))
+    return out
+
+
+def verify_grounding(answer: str, corpus: str):
+    """Return the list of numbers/record-ids in `answer` not found in `corpus`
+    (the concatenated tool outputs + resolved-context block for this turn).
+    Amounts must match BOTH numeric value and currency label."""
+    corpus = corpus or ""
+    corpus_amounts = _amounts_with_currency(corpus)
+    corpus_vals = {v for v, _ in corpus_amounts}
+    corpus_low = corpus.lower()
+    data_amounts = _answer_amounts(answer)
+    _, ids = _answer_facts(answer)
+    bad = []
+    for val, cur in data_amounts:
+        if cur:
+            # Currency-qualified amount: require same value WITH same currency nearby.
+            if (val, cur) not in corpus_amounts:
+                bad.append(_fmt_num(val) + f" ({cur})" if cur else _fmt_num(val))
         else:
-            parts.append(f"{k}: {v}")
-    return " | ".join(parts)
+            # Bare number: require the value anywhere in the corpus.
+            if not any(abs(val - cn) < 0.01 for cn in corpus_vals):
+                bad.append(_fmt_num(val))
+    for i in ids:
+        if i.lower() not in corpus_low:
+            bad.append(i)
+    return bad
 
 
+def _fmt_num(n: float) -> str:
+    return str(int(n)) if float(n).is_integer() else str(n)
+
+
+# Cache of compiled agents keyed by (api_key, model_name) so we don't rebuild the
+# 20 tools + graph on every request.
+_AGENT_CACHE: Dict[tuple, Any] = {}
+
+
+def _resolve_model_name(provider: str) -> str:
+    env_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+    if provider and provider.startswith("gemini-"):
+        return provider
+    return env_model
+
+
+def _get_compiled_agent(api_key: str, model_name: str):
+    """Build (or fetch from cache) the compiled ReAct agent for this key+model.
+
+    The cache key is a SHA-256 hash of the API key so raw secrets are never
+    retained as dict keys / in tracebacks."""
+    import hashlib
+    key_hash = hashlib.sha256((api_key or "").encode("utf-8")).hexdigest()
+    cache_key = (key_hash, model_name)
+    if cache_key in _AGENT_CACHE:
+        return _AGENT_CACHE[cache_key]
+
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    from langgraph.prebuilt import create_react_agent
+    from agent_tools import build_tools
+
+    llm = ChatGoogleGenerativeAI(model=model_name, temperature=0.1, google_api_key=api_key)
+    agent = create_react_agent(llm, build_tools())
+    _AGENT_CACHE[cache_key] = agent
+    logger.info(f"Compiled ReAct agent (model={model_name}); cached for reuse.")
+    return agent
 class ChatbotEngine:
     def __init__(self, gemini_api_key: Optional[str] = None):
         self.gemini_api_key = gemini_api_key or os.getenv("GEMINI_API_KEY", "")
@@ -63,842 +199,151 @@ class ChatbotEngine:
         chat_history: Optional[List[Dict[str, str]]] = None,
         provider: str = "gemini",
         client: Any = None,
+        conversation_id: Optional[str] = None,
+        memory: Any = None,
     ) -> str:
-        if chat_history is None:
-            chat_history = []
+        chat_history = chat_history or []
 
         if not self.is_ready():
-            return (
-                "Chatbot is not ready. Please provide a Google Gemini API Key "
-                "in the AI Chatbot Config section of the sidebar."
-            )
-
+            return ("Chatbot is not ready. Please provide a Google Gemini API Key "
+                    "in the AI Chatbot Config section of the sidebar.")
         if client is None:
-            return (
-                "No Unifier connection established. Please enter your Bearer Token "
-                "and click Test API Connection first, then ask your question again."
-            )
+            return ("No Unifier connection established. Please enter your Bearer Token "
+                    "and click Test API Connection first, then ask your question again.")
 
-        return self._get_agent_response(user_query, chat_history, provider, client)
+        # Load conversation memory if the caller didn't hand one in.
+        from agent_memory import ConversationMemory
+        if memory is None:
+            memory = ConversationMemory.load(conversation_id)
 
-    def _get_agent_response(
-        self,
-        user_query: str,
-        chat_history: List[Dict[str, str]],
-        provider: str,
-        client: Any,
-    ) -> str:
         try:
-            from langchain_core.tools import tool
-            from langgraph.prebuilt import create_react_agent
-        except ImportError as e:
-            return f"Required dependency missing: {e}. Please redeploy."
-
-        # ── TOOL 1: Active Projects ──────────────────────────────────────────
-        @tool
-        def query_active_projects() -> str:
-            """
-            Fetches ALL active project shells from Primavera Unifier live API.
-            Returns total count, project names, numbers, status, type.
-            """
-            try:
-                # 1. Live API (primary)
-                if client is not None:
-                    success, data, status_code, _ = client.get_active_projects()
-                    if success:
-                        records = _extract_records(data)
-                        total = len(records)
-                        if total == 0:
-                            return "No active projects found in the database."
-
-                        field_keys = list(records[0].keys()) if isinstance(records[0], dict) else []
-                        lines = [
-                            f"Total active projects (live API): {total}",
-                            f"Available fields per project: {', '.join(field_keys)}",
-                            "",
-                            "Project listing (first 50):"
-                        ]
-                        for i, r in enumerate(records[:50]):
-                            if isinstance(r, dict):
-                                name = r.get("projectname") or r.get("name") or "N/A"
-                                num = r.get("projectnumber") or r.get("project_number") or "N/A"
-                                status = r.get("status") or r.get("projectstatus") or "N/A"
-                                ptype = r.get("type") or r.get("projecttype") or "N/A"
-                                lines.append(f"  {i+1}. Name: {name} | Number: {num} | Status: {status} | Type: {ptype}")
-                        if total > 50:
-                            lines.append(f"  ... and {total - 50} more projects.")
-                        return "\n".join(lines)
-
-                # 2. Fallback to local SQLite cache
-                try:
-                    from sync_manager import get_db_connection
-                    conn = get_db_connection()
-                    c = conn.cursor()
-                    c.execute("SELECT project_number, project_name, status, project_type FROM cached_projects WHERE status='Active' OR status='active'")
-                    rows = c.fetchall()
-                    conn.close()
-                    if rows:
-                        lines = [
-                            f"Total active projects (local cache fallback): {len(rows)}",
-                            "",
-                            "Project listing:"
-                        ]
-                        for i, r in enumerate(rows[:50], 1):
-                            lines.append(f"  {i}. Name: {r[1]} | Number: {r[0]} | Status: {r[2]} | Type: {r[3]}")
-                        return "\n".join(lines)
-                except Exception:
-                    pass
-
-                return "No active projects could be retrieved from the Unifier API."
-            except Exception as e:
-                return f"Error querying active projects: {e}"
-
-        # ── TOOL 2: Company BP Catalog ───────────────────────────────────────
-        @tool
-        def query_company_bp_catalog() -> str:
-            """
-            Fetches master list of all Company-level Business Processes (BPs) in Unifier live API.
-            """
-            try:
-                # 1. Live API (primary)
-                if client is not None:
-                    success, data, status_code, _ = client.get_company_bp_list()
-                    if success:
-                        records = _extract_records(data)
-                        total = len(records)
-                        if total == 0:
-                            return "No Company Business Processes found."
-
-                        field_keys = list(records[0].keys()) if isinstance(records[0], dict) else []
-                        lines = [
-                            f"Total Company Business Processes (live API): {total}",
-                            f"Available fields: {', '.join(field_keys)}",
-                            "",
-                            "Full BP list:"
-                        ]
-                        for i, r in enumerate(records):
-                            if isinstance(r, dict):
-                                bp_name = r.get("bp_name") or r.get("bp_model_name") or str(r)
-                                model = r.get("bp_model_name") or ""
-                                source = r.get("studio_source") or r.get("source") or ""
-                                extra = f" | Model: {model}" if model else ""
-                                extra += f" | Source: {source}" if source else ""
-                                lines.append(f"  {i+1}. {bp_name}{extra}")
-                        return "\n".join(lines)
-
-                # 2. Fallback to local SQLite cache
-                try:
-                    from sync_manager import get_db_connection
-                    conn = get_db_connection()
-                    c = conn.cursor()
-                    c.execute("SELECT bp_name, bp_model_name, studio_source FROM cached_company_bps")
-                    rows = c.fetchall()
-                    conn.close()
-                    if rows:
-                        lines = [
-                            f"Total Company Business Processes (local cache fallback): {len(rows)}",
-                            "",
-                            "Full BP list:"
-                        ]
-                        for i, r in enumerate(rows, 1):
-                            lines.append(f"  {i}. {r[0]} | Model: {r[1]} | Source: {r[2]}")
-                        return "\n".join(lines)
-                except Exception:
-                    pass
-
-                return "No Company Business Processes available from the Unifier API."
-            except Exception as e:
-                return f"Error querying company BP catalog: {e}"
-
-        # ── TOOL 3: Project BP Catalog ───────────────────────────────────────
-        @tool
-        def query_project_bp_catalog(project_number: str) -> str:
-            """
-            Fetches all Business Processes available for a specific project/shell.
-            Args:
-                project_number: The project shell number (e.g. '000001').
-            """
-            try:
-                if client is None:
-                    return f"No Unifier connection provided to fetch BPs for project '{project_number}'."
-                success, data, status_code, _ = client.get_project_bp_list(project_number)
-                if not success:
-                    return f"Project BP Catalog API failed for project '{project_number}' (HTTP {status_code}): {data}"
-                records = _extract_records(data)
-                total = len(records)
-                if total == 0:
-                    return f"No Business Processes found for project {project_number}."
-
-                lines = [f"Project '{project_number}' has {total} Business Processes:"]
-                for i, r in enumerate(records):
-                    if isinstance(r, dict):
-                        bp_name = r.get("bp_name") or r.get("bp_model_name") or str(r)
-                        lines.append(f"  {i+1}. {bp_name}")
-                    else:
-                        lines.append(f"  {i+1}. {r}")
-                return "\n".join(lines)
-            except Exception as e:
-                return f"Error querying project BP catalog: {e}"
-
-        # ── TOOL 4: Company BP Records (all) ────────────────────────────────
-        @tool
-        def query_company_bp_records(bpname: str) -> str:
-            """
-            Fetches all records inside a specific Company-level Business Process.
-            Args:
-                bpname: The exact BP name (e.g. 'Vendor', 'Contract', 'RFI').
-            """
-            try:
-                # 1. Live API (primary)
-                if client is not None:
-                    success, data, status_code, _ = client.get_company_bp_records(bpname=bpname)
-                    if success:
-                        records = _extract_records(data)
-                        total = len(records)
-                        if total == 0:
-                            return f"No records found in Company BP '{bpname}'."
-
-                        field_keys = list(records[0].keys()) if isinstance(records[0], dict) else []
-                        lines = [
-                            f"Company BP '{bpname}' (live API): {total} total records",
-                            f"Fields available: {', '.join(field_keys)}",
-                            "",
-                            "Records (first 20):"
-                        ]
-                        for i, r in enumerate(records[:20]):
-                            if isinstance(r, dict):
-                                lines.append(f"  Record {i+1}: {_format_record(r)}")
-                            else:
-                                lines.append(f"  Record {i+1}: {r}")
-                        if total > 20:
-                            lines.append(f"  ... and {total - 20} more records.")
-                        return "\n".join(lines)
-
-                # 2. Fallback to local cache
-                try:
-                    from sync_manager import get_db_connection
-                    conn = get_db_connection()
-                    c = conn.cursor()
-                    c.execute("SELECT record_no, title, status, creator, assigned_to FROM cached_bp_records WHERE scope_type='company' AND bp_name=?", (bpname,))
-                    rows = c.fetchall()
-                    conn.close()
-                    if rows:
-                        lines = [f"Company BP '{bpname}' (local cache fallback): {len(rows)} records found", ""]
-                        for i, r in enumerate(rows[:20], 1):
-                            lines.append(f"  Record {i}: #{r[0]} | Title: {r[1]} | Status: {r[2]} | Creator: {r[3]} | Assigned: {r[4]}")
-                        return "\n".join(lines)
-                except Exception:
-                    pass
-
-                return f"No records found in Company BP '{bpname}'."
-            except Exception as e:
-                return f"Error querying company BP records for '{bpname}': {e}"
-
-        # ── TOOL 5: Specific Company BP Record by record_no ──────────────────
-        @tool
-        def query_specific_company_bp_record(bpname: str, record_no: str) -> str:
-            """
-            Fetches a single specific record from a Company-level Business Process by its record number.
-            """
-            try:
-                if client is None:
-                    return f"No Unifier connection provided to fetch record '{record_no}'."
-                success, data, status_code, _ = client.get_company_bp_records(
-                    bpname=bpname,
-                    filter_condition=f"record_no={record_no}"
-                )
-                if not success:
-                    return f"Specific record lookup failed for BP '{bpname}' record '{record_no}' (HTTP {status_code}): {data}"
-                records = _extract_records(data)
-                if len(records) == 0:
-                    return f"Record '{record_no}' not found in Company BP '{bpname}'."
-
-                r = records[0]
-                if isinstance(r, dict):
-                    return (
-                        f"Company BP '{bpname}' | Record '{record_no}':\n"
-                        f"{_format_record(r, max_fields=100)}"
-                    )
-                return str(r)
-            except Exception as e:
-                return f"Error fetching specific record '{record_no}' from BP '{bpname}': {e}"
-
-        # ── TOOL 6: Project BP Records (all records) ─────────────────────
-        @tool
-        def query_project_bp_records(project_number: str, bpname: str) -> str:
-            """
-            Fetches ALL records inside a Business Process for a specific project/shell.
-            """
-            try:
-                # 1. Live API (primary)
-                if client is not None:
-                    success, data, status_code, _ = client.get_project_bp_records(
-                        project_number=project_number,
-                        bpname=bpname
-                    )
-                    if success:
-                        records = _extract_records(data)
-                        total = len(records)
-                        if total == 0:
-                            return f"No records found in BP '{bpname}' for project '{project_number}'."
-
-                        field_keys = list(records[0].keys()) if isinstance(records[0], dict) else []
-                        lines = [
-                            f"Project '{project_number}' | BP '{bpname}' (live API): {total} total records",
-                            f"Fields available: {', '.join(field_keys)}",
-                            "",
-                            "Records (first 20):"
-                        ]
-                        for i, r in enumerate(records[:20]):
-                            if isinstance(r, dict):
-                                lines.append(f"  Record {i+1}: {_format_record(r)}")
-                            else:
-                                lines.append(f"  Record {i+1}: {r}")
-                        if total > 20:
-                            lines.append(f"  ... and {total - 20} more records.")
-                        return "\n".join(lines)
-
-                # 2. Fallback to local cache
-                try:
-                    from sync_manager import get_db_connection
-                    conn = get_db_connection()
-                    c = conn.cursor()
-                    c.execute("SELECT record_no, title, status, creator, assigned_to FROM cached_bp_records WHERE scope_type='project' AND project_number=? AND bp_name=?", (project_number, bpname))
-                    rows = c.fetchall()
-                    conn.close()
-                    if rows:
-                        lines = [f"Project '{project_number}' | BP '{bpname}' (local cache fallback): {len(rows)} records found", ""]
-                        for i, r in enumerate(rows[:20], 1):
-                            lines.append(f"  Record {i}: #{r[0]} | Title: {r[1]} | Status: {r[2]} | Creator: {r[3]} | Assigned: {r[4]}")
-                        return "\n".join(lines)
-                except Exception:
-                    pass
-
-                return f"No records found in BP '{bpname}' for project '{project_number}'."
-            except Exception as e:
-                return f"Error querying project BP records for project '{project_number}' BP '{bpname}': {e}"
-
-        # ── TOOL 7: Specific Project BP Record by record_no ──────────────────
-        @tool
-        def query_specific_project_bp_record(project_number: str, bpname: str, record_no: str) -> str:
-            """
-            Fetches a single specific record from a Project-level Business Process by its record number.
-            """
-            try:
-                if client is None:
-                    return f"No Unifier connection provided to fetch record '{record_no}'."
-                success, data, status_code, _ = client.get_project_bp_records(
-                    project_number=project_number,
-                    bpname=bpname,
-                    filter_condition=f"record_no={record_no}"
-                )
-                if not success:
-                    return f"Specific record lookup failed for project '{project_number}' BP '{bpname}' record '{record_no}' (HTTP {status_code}): {data}"
-                records = _extract_records(data)
-                if len(records) == 0:
-                    return f"Record '{record_no}' not found in BP '{bpname}' for project '{project_number}'."
-
-                r = records[0]
-                if isinstance(r, dict):
-                    return (
-                        f"Project '{project_number}' | BP '{bpname}' | Record '{record_no}':\n"
-                        f"{_format_record(r, max_fields=100)}"
-                    )
-                return str(r)
-            except Exception as e:
-                return f"Error fetching specific record '{record_no}' from project '{project_number}' BP '{bpname}': {e}"
-
-        # ── TOOL 8: User Directory (all) ─────────────────────────────────────
-        @tool
-        def query_user_directory() -> str:
-            """
-            Fetches ALL users from the Unifier user administration directory.
-            """
-            try:
-                # 1. Live API (primary)
-                if client is not None:
-                    success, data, status_code, _ = client.get_users()
-                    if success:
-                        records = _extract_records(data)
-                        total = len(records)
-                        if total == 0:
-                            return "No users found in Unifier directory."
-                        lines = [f"Total users in Unifier directory (live API): {total}", "", "User listing:"]
-                        for i, r in enumerate(records[:50], 1):
-                            if isinstance(r, dict):
-                                un = r.get("user_name") or r.get("username") or "N/A"
-                                fn = r.get("first_name") or ""
-                                ln = r.get("last_name") or ""
-                                full = f"{fn} {ln}".strip() or un
-                                em = r.get("email") or "N/A"
-                                st = r.get("status") or "Active"
-                                lines.append(f"  {i}. {full} ({un}) | Email: {em} | Status: {st}")
-                            else:
-                                lines.append(f"  {i}. {r}")
-                        if total > 50:
-                            lines.append(f"  ... and {total - 50} more users.")
-                        return "\n".join(lines)
-
-                # 2. Fallback to local SQLite cache
-                try:
-                    from sync_manager import get_db_connection
-                    conn = get_db_connection()
-                    c = conn.cursor()
-                    c.execute("SELECT user_name, first_name, last_name, email, status FROM cached_users")
-                    rows = c.fetchall()
-                    conn.close()
-                    if rows:
-                        lines = [
-                            f"Total users in Unifier directory (local cache fallback): {len(rows)}",
-                            "",
-                            "User listing:"
-                        ]
-                        for i, r in enumerate(rows[:50], 1):
-                            full_name = f"{r[1]} {r[2]}".strip() or r[0]
-                            lines.append(f"  {i}. {full_name} ({r[0]}) | Email: {r[3]} | Status: {r[4]}")
-                        return "\n".join(lines)
-                except Exception:
-                    pass
-
-                return "User directory could not be retrieved from the Unifier API."
-            except Exception as e:
-                return f"Error querying user directory: {e}"
-
-        # ── TOOL 9: Users Filtered by name/email/login ───────────────────────
-        @tool
-        def query_users_filtered(filter_value: str) -> str:
-            """
-            Searches for specific users in Unifier by name, email, or login ID.
-            """
-            try:
-                if client is None:
-                    return f"No Unifier connection provided to filter users for '{filter_value}'."
-                filter_cond = filter_value.strip()
-                success, data, status_code, _ = client.get_users(filter_condition=filter_cond)
-                if not success:
-                    return f"User search failed (HTTP {status_code}): {data}"
-                records = _extract_records(data)
-                total = len(records)
-                if total == 0:
-                    return f"No users found matching '{filter_value}'."
-                field_keys = list(records[0].keys()) if isinstance(records[0], dict) else []
-                lines = [
-                    f"Found {total} user(s) matching '{filter_value}':",
-                    f"User fields: {', '.join(field_keys)}",
-                    ""
-                ]
-                for i, r in enumerate(records[:20]):
-                    if isinstance(r, dict):
-                        lines.append(f"  {i+1}: {_format_record(r, max_fields=10)}")
-                    else:
-                        lines.append(f"  {i+1}: {r}")
-                return "\n".join(lines)
-            except Exception as e:
-                return f"Error searching users for '{filter_value}': {e}"
-
-        # ── TOOL 10: Full Database Summary (all endpoints) ────────────────────
-        @tool
-        def query_full_database_summary() -> str:
-            """
-            Hits ALL major Unifier endpoints at once and returns a comprehensive summary.
-            """
-            lines = ["=== FULL UNIFIER DATABASE SUMMARY ===", ""]
-
-            # Try local cache summary first
-            try:
-                from sync_manager import get_sync_stats
-                stats = get_sync_stats()
-                lines.append(f"📁 Cached Projects: {stats.get('cached_projects', 0)}")
-                lines.append(f"🗂️  Cached Company BPs: {stats.get('cached_company_bps', 0)}")
-                lines.append(f"📄 Cached BP Records: {stats.get('cached_bp_records', 0)}")
-                lines.append(f"👥 Cached Users: {stats.get('cached_users', 0)}")
-                lines.append(f"🔍 Vector Embeddings Index: {stats.get('vector_embeddings', 0)}")
-                lines.append(f"⏰ Last Sync Timestamp: {stats.get('last_sync', 'Never')}")
-                lines.append("")
-            except Exception:
-                pass
-
-            if client:
-                lines.append("--- LIVE UNIFIER API ENDPOINTS ---")
-                try:
-                    ok, data, code, _ = client.get_active_projects()
-                    records = _extract_records(data) if ok else []
-                    lines.append(f"📁 Live Active Projects: {len(records)} (HTTP {code})")
-                except Exception as e:
-                    lines.append(f"📁 Active Projects: {e}")
-
-            return "\n".join(lines)
-
-        # ── TOOL 11: Smart Project User Lookup ───────────────────────────
-        @tool
-        def query_project_users(project_number: str) -> str:
-            """
-            Smart search for users/people assigned to a specific project.
-            Checks local SQLite cache first for instant lookup, bounded live API fallback.
-            """
-            try:
-                # 1. Try local SQLite cache first (instant <2ms)
-                try:
-                    from sync_manager import get_db_connection
-                    conn = get_db_connection()
-                    c = conn.cursor()
-                    c.execute("""
-                        SELECT bp_name, 'creator', creator FROM cached_bp_records WHERE project_number=? AND creator != ''
-                        UNION
-                        SELECT bp_name, 'assigned_to', assigned_to FROM cached_bp_records WHERE project_number=? AND assigned_to != ''
-                    """, (project_number, project_number))
-                    rows = c.fetchall()
-                    conn.close()
-                    if rows:
-                        lines = [
-                            f"### Users found in Project '{project_number}' (local cache)",
-                            f"Found {len(rows)} user assignment records.\n",
-                            "| Business Process | Field | Assigned User/Value |",
-                            "|---|---|---|"
-                        ]
-                        for r in rows[:50]:
-                            lines.append(f"| {r[0]} | {r[1]} | {r[2]} |")
-                        return "\n".join(lines)
-                except Exception:
-                    pass
-
-                # 2. Live API fallback (bounded to first 3 BPs max to avoid HTTP timeout)
-                if client is None:
-                    return f"No Unifier connection provided and no cached user records found for project '{project_number}'."
-
-                ok, bp_data, code, _ = client.get_project_bp_list(project_number)
-                if not ok:
-                    return f"Could not fetch BPs for project '{project_number}' (HTTP {code}): {bp_data}"
-                bp_records = _extract_records(bp_data)
-                if not bp_records:
-                    return f"No Business Processes found for project '{project_number}'."
-
-                bp_names = []
-                for r in bp_records:
-                    if isinstance(r, dict):
-                        n = r.get("bp_name") or r.get("bp_model_name") or ""
-                        if n:
-                            bp_names.append(str(n))
-
-                USER_FIELDS = {
-                    "assigned_to", "assignedto", "creator", "created_by", "createdby",
-                    "owner", "owner_id", "manager", "project_manager", "responsible",
-                    "user", "user_name", "username", "modified_by", "modifiedby"
-                }
-
-                found_users = []
-                for bp_name in bp_names[:3]:  # Max 3 BPs live to avoid 502 timeout
-                    try:
-                        ok2, rec_data, _, _ = client.get_project_bp_records(
-                            project_number=project_number, bpname=bp_name
-                        )
-                        if not ok2:
-                            continue
-                        recs = _extract_records(rec_data)
-                        for rec in recs[:5]:
-                            if not isinstance(rec, dict):
-                                continue
-                            for k, v in rec.items():
-                                if k.lower().replace("-", "_") in USER_FIELDS and v:
-                                    found_users.append({
-                                        "BP": bp_name,
-                                        "Field": k,
-                                        "Value": str(v)
-                                    })
-                    except Exception:
-                        continue
-
-                if not found_users:
-                    return f"Project '{project_number}' scanning checked initial BPs. No user assignment fields found or token unauthorized."
-
-                lines = [
-                    f"### Users found in Project '{project_number}'",
-                    "| Business Process | Field | Assigned User/Value |",
-                    "|---|---|---|"
-                ]
-                for u in found_users[:30]:
-                    lines.append(f"| {u['BP']} | {u['Field']} | {u['Value']} |")
-                return "\n".join(lines)
-            except Exception as e:
-                return f"Error scanning project '{project_number}' for users: {e}"
-
-        # ── TOOL 12: Vector Store Semantic Search ─────────────────────────────
-        @tool
-        def query_vector_search_unifier(query: str, project_number: str = "", bp_name: str = "") -> str:
-            """
-            Performs fast semantic similarity vector search across the cached ChromaDB vector store.
-            Use for open-ended questions like 'find change orders related to concrete', 'why was contract delayed', 'search for supplier documents'.
-            Args:
-                query: Search text query.
-                project_number: Optional filter by project number.
-                bp_name: Optional filter by BP name.
-            """
-            try:
-                from sync_manager import query_vector_search
-                results = query_vector_search(query_text=query, project_number=project_number or None, bp_name=bp_name or None, n_results=5)
-                if not results:
-                    return "No matching semantic results found in the local vector store. Try live querying or triggering a sync."
-                lines = [f"Found {len(results)} relevant vector matches:"]
-                for idx, r in enumerate(results, 1):
-                    doc = r.get("document", "")
-                    meta = r.get("metadata", {})
-                    dist = r.get("distance")
-                    score_str = f" (distance: {dist:.3f})" if dist is not None else ""
-                    lines.append(f"  {idx}. [{meta.get('scope_type', 'record')}] {doc[:300]}{score_str}")
-                return "\n".join(lines)
-            except Exception as e:
-                return f"Vector search error: {e}"
-
-        # ── TOOL 13: Local Fast Cache Sync ─────────────────────────────────────
-        @tool
-        def trigger_local_data_sync() -> str:
-            """
-            Triggers a full sync of remote Unifier REST API data into the local SQLite cache and ChromaDB vector store.
-            Use when user asks to 'sync data', 'refresh database', 'update local vector store'.
-            """
-            try:
-                from sync_manager import SyncManager
-                sm = SyncManager(client=client)
-                res = sm.sync_all()
-                return f"Sync complete! Total records synced: {res.get('total_records_synced', 0)} in {res.get('elapsed_ms', 0):.1f}ms."
-            except Exception as e:
-                return f"Sync error: {e}"
-
-        # ── TOOL 14: Oracle Primavera Unifier Documentation & References ─────
-        @tool
-        def query_oracle_documentation_guides() -> str:
-            """
-            Returns the official Oracle Primavera Unifier v26 documentation links, user manuals, and BP field schema mappings (bp_model_name, bp_name, studio_source).
-            Use when user asks about documentation, reference guides, uDesigner guide, integration interface guide, business process user guide, or BP field mapping definitions.
-            """
-            return (
-                "### 📚 Official Oracle Primavera Unifier v26 Reference Guides & Schema\n\n"
-                "#### **Official Oracle Documentation Links**\n"
-                "- 🔗 [Integration Interface Guide](https://docs.oracle.com/en/industries/construction-engineering/primavera-unifier/26/integration-interface/introduction-10280474a.html)\n"
-                "- 🔗 [Data Reference Guide](http://docs.oracle.com/en/industries/construction-engineering/primavera-unifier/26/reference/introduction-10289477a.html)\n"
-                "- 🔗 [Business Processes User Guide](https://docs.oracle.com/en/industries/construction-engineering/primavera-unifier/26/business-process/workingwithbusinessprocesses-10292605a.html)\n"
-                "- 🔗 [uDesigner User Guide](https://docs.oracle.com/en/industries/construction-engineering/primavera-unifier/26/udesigner/introducingunifierudesigner-77633a.html)\n"
-                "- 🔗 [General User Guide](https://docs.oracle.com/en/industries/construction-engineering/primavera-unifier/26/general-user/gettingstartedwithgeneraloperations-73021a.html)\n"
-                "- 🔗 [Managers User Guide](https://docs.oracle.com/en/industries/construction-engineering/primavera-unifier/26/general-user/gettingstartedwithgeneraloperations-73021a.html)\n\n"
-                "#### **Business Process (BP) Field Schema Mapping**\n"
-                "| Field Name | Description / Unique Property |\n"
-                "|---|---|\n"
-                "| `bp_model_name` | The BP Model ID (Unique Identifier) |\n"
-                "| `bp_name` | The BP Display Name (Unique) |\n"
-                "| `studio_source` | The BP Type / Studio Source (simple, database, etc.) |\n"
-                "| `no_workflow` | Boolean flag indicating if BP is non-workflow |\n"
-            )
-
-        # ── TOOL 15: Cross-Project Record Search ──────────────────────────────
-        @tool
-        def query_records_across_projects(status: str = "", bp_name: str = "", assigned_to: str = "", keyword: str = "", project_number: str = "") -> str:
-            """
-            Searches cached Business Process records across ALL projects and BPs at once.
-            Use for broad requests that don't name one specific project/BP, e.g. "my open
-            tasks", "all pending change orders", "risks and issues", "vendor records",
-            "draft records", "find records about X".
-            Args:
-                status: Optional status filter (e.g. 'Open', 'Pending', 'Draft', 'Closed'). Partial match.
-                bp_name: Optional BP name filter (e.g. 'Change Order', 'Risk', 'Vendor'). Partial match.
-                assigned_to: Optional assignee/creator name filter. Partial match.
-                keyword: Optional free-text match against record title and stored field data.
-                project_number: Optional single project number to scope the search.
-            """
-            try:
-                from sync_manager import query_records_cross_project
-                rows = query_records_cross_project(
-                    status=status, bp_name=bp_name, assigned_to=assigned_to,
-                    keyword=keyword, project_number=project_number, limit=50
-                )
-                if not rows:
-                    return "No matching records found in the local cache for those filters. Try triggering a sync or broadening the filters."
-                lines = [f"Found {len(rows)} record(s) (showing up to 50):", ""]
-                for r in rows:
-                    lines.append(
-                        f"  Project {r['project_number']} | {r['bp_name']} | #{r['record_no']} | "
-                        f"{r['title']} | Status: {r['status']} | Assigned: {r['assigned_to'] or 'n/a'}"
-                    )
-                return "\n".join(lines)
-            except Exception as e:
-                return f"Error searching records across projects: {e}"
-
-        # ── TOOL 16: Cross-Project Status Summary ──────────────────────────────
-        @tool
-        def query_records_status_summary(bp_name: str = "", project_number: str = "") -> str:
-            """
-            Returns record counts grouped by Business Process and status across projects.
-            Use for "project health summary", "workflow bottlenecks", "executive brief",
-            "weekly report" style requests. NOTE: cost, budget, and schedule/milestone
-            dates are NOT in this cached summary (they live in BP-specific custom fields
-            that vary per BP) — say that plainly rather than guessing numbers.
-            Args:
-                bp_name: Optional BP name filter (e.g. 'Change Order'). Partial match.
-                project_number: Optional single project number to scope the summary.
-            """
-            try:
-                from sync_manager import query_records_status_summary as _status_summary
-                rows = _status_summary(bp_name=bp_name, project_number=project_number)
-                if not rows:
-                    return "No cached records match those filters. Try triggering a sync or broadening the filters."
-                lines = ["BP / Status breakdown (record counts):", ""]
-                for r in rows:
-                    lines.append(f"  {r['bp_name']} — {r['status']}: {r['record_count']}")
-                return "\n".join(lines)
-            except Exception as e:
-                return f"Error summarizing record status: {e}"
-
-        tools = [
-            query_active_projects,            # GET  /admin/projectshell?Status=Active
-            query_company_bp_catalog,          # GET  /admin/bps
-            query_project_bp_catalog,          # GET  /admin/bps/{project_number}
-            query_company_bp_records,          # POST /bp/records/
-            query_specific_company_bp_record,  # POST /bp/records/ (by record_no)
-            query_project_bp_records,          # POST /bp/records/{project}
-            query_specific_project_bp_record,  # POST /bp/records/{project} (by record_no)
-            query_user_directory,              # POST /admin/user/get
-            query_users_filtered,              # POST /admin/user/get (with filter)
-            query_project_users,               # Smart: scans ALL project BPs for user fields
-            query_full_database_summary,       # All endpoints combined
-            query_vector_search_unifier,       # ChromaDB Vector Store Search
-            trigger_local_data_sync,           # SQLite + ChromaDB Sync
-            query_oracle_documentation_guides, # Official Oracle Unifier Docs & BP Schema Mapping
-            query_records_across_projects,     # Cross-project/BP record search (tasks, risks, vendors, drafts...)
-            query_records_status_summary,      # Cross-project status breakdown (health/bottleneck summaries)
-        ]
-
-        # ── Build LLM (Gemini only) ─────────────────────────────────────────
-        try:
-            if not self.gemini_api_key:
-                return "Google Gemini API key is missing. Please add it in the AI Chatbot Config sidebar."
-            from langchain_google_genai import ChatGoogleGenerativeAI
-            # Default to gemini-2.5-flash-lite for 500 RPD / 250K TPM free tier limits
-            model_name = os.getenv("GEMINI_MODEL", provider if provider.startswith("gemini") else "gemini-2.5-flash-lite")
-            llm = ChatGoogleGenerativeAI(
-                model=model_name,
-                temperature=0.1,
-                google_api_key=self.gemini_api_key,
-            )
+            agent = _get_compiled_agent(self.gemini_api_key, _resolve_model_name(provider))
         except Exception as e:
-            return f"Failed to initialise LLM: {e}"
+            return f"Failed to initialise LLM/agent: {e}"
 
-        # ── System Prompt ────────────────────────────────────────────────────
-        system_prompt = (
-            "You are a STRICT Oracle Primavera Unifier database assistant. "
-            "Unifier is a construction project management platform.\n"
-            "You ONLY answer questions about data stored in this Unifier database.\n\n"
-            "TOOLS AVAILABLE (16 live & cached tools — call them to get real data):\n"
-            "  1.  query_active_projects — all active project shells (name, number, status, type)\n"
-            "  2.  query_company_bp_catalog — list of all Company-level Business Processes\n"
-            "  3.  query_project_bp_catalog(project_number) — BPs for a project\n"
-            "  4.  query_company_bp_records(bpname) — all records in a Company BP\n"
-            "  5.  query_specific_company_bp_record(bpname, record_no) — one Company BP record by ID\n"
-            "  6.  query_project_bp_records(project_number, bpname) — all records in a Project BP\n"
-            "  7.  query_specific_project_bp_record(project_number, bpname, record_no) — one Project BP record\n"
-            "  8.  query_user_directory — full user list from /admin/user/get\n"
-            "  9.  query_users_filtered(filter_value) — search user by name or email\n"
-            "  10. query_project_users(project_number) — SMART: scans ALL project BPs to find assigned users\n"
-            "  11. query_full_database_summary — overview from all endpoints\n"
-            "  12. query_vector_search_unifier(query) — FAST semantic vector search over cached records\n"
-            "  13. trigger_local_data_sync — Sync remote Unifier data into local SQLite & ChromaDB\n"
-            "  14. query_oracle_documentation_guides — Returns official Oracle Unifier v26 documentation URLs & BP schema mappings\n"
-            "  15. query_records_across_projects(status, bp_name, assigned_to, keyword, project_number) — searches records across ALL projects/BPs at once, all args optional\n"
-            "  16. query_records_status_summary(bp_name, project_number) — record counts grouped by BP + status across projects, both args optional\n\n"
-            "OFFICIAL ORACLE PRIMAVERA UNIFIER V26 REFERENCE GUIDES:\n"
-            "  - Integration Interface Guide: https://docs.oracle.com/en/industries/construction-engineering/primavera-unifier/26/integration-interface/introduction-10280474a.html\n"
-            "  - Data Reference Guide: http://docs.oracle.com/en/industries/construction-engineering/primavera-unifier/26/reference/introduction-10289477a.html\n"
-            "  - Business Processes User Guide: https://docs.oracle.com/en/industries/construction-engineering/primavera-unifier/26/business-process/workingwithbusinessprocesses-10292605a.html\n"
-            "  - uDesigner User Guide: https://docs.oracle.com/en/industries/construction-engineering/primavera-unifier/26/udesigner/introducingunifierudesigner-77633a.html\n"
-            "  - General User Guide: https://docs.oracle.com/en/industries/construction-engineering/primavera-unifier/26/general-user/gettingstartedwithgeneraloperations-73021a.html\n"
-            "  - Managers User Guide: https://docs.oracle.com/en/industries/construction-engineering/primavera-unifier/26/general-user/gettingstartedwithgeneraloperations-73021a.html\n\n"
-            "BP SCHEMA MAPPING:\n"
-            "  - bp_model_name: Unique BP Identifier / Model Name (e.g. 'uxsample', 'uxbpor')\n"
-            "  - bp_name: Unique BP Display Name (e.g. 'AM_sample', 'BPO PP')\n"
-            "  - studio_source: BP Type / Studio Source (e.g. 'simple', 'database')\n\n"
-            "STRICT RULES:\n"
-            "1. SCOPE: You are an expert assistant for Oracle Primavera Unifier. Answer database queries, REST API questions, BP field mappings, and documentation guide requests. For completely unrelated non-Unifier topics (such as weather, sports, or entertainment), politely state that your scope is limited to Primavera Unifier.\n"
-            "2. ALWAYS call the right tool before answering. NEVER fabricate or guess data.\n"
-            "3. API ERRORS & FAILURES: If a tool returns an API error or status code failure (e.g. HTTP 401 Unauthorized, 403 Forbidden, 500 Error), ALWAYS clearly report the error and status code to the user: "
-            "'⚠️ Unifier API Request Failed (HTTP [code]): [message]. Please check your Bearer Token or permissions in the sidebar.' DO NOT respond with out-of-scope fallback when a tool fails.\n"
-            "4. OUTPUT FORMAT — MANDATORY:\n"
-            "   - ALWAYS present lists, records, and data as MARKDOWN TABLES.\n"
-            "   - Use | Column | Column | format with a header separator row |---|---|\n"
-            "   - For projects table: columns = | # | Project Name | Project Number | Status | Type |\n"
-            "   - For users table: columns = | # | Name/Username | Role/Field | Source BP |\n"
-            "   - For BP records: present key fields as a table.\n"
-            "5. For semantic queries ('why', 'find documents about X'): call query_vector_search_unifier.\n"
-            "6. For 'sync database' or 'update cache': call trigger_local_data_sync.\n"
-            "7. For documentation, reference guides, uDesigner guide, integration guide, user guides, or BP schema field mapping: ALWAYS call query_oracle_documentation_guides.\n"
-            "8. BROAD / CROSS-PROJECT REQUESTS (NEVER refuse these without calling a tool first): for "
-            "requests that span all projects/BPs instead of naming one — 'my tasks', 'open risks and "
-            "issues', 'pending change orders', 'vendor/contractor records', 'draft records', 'workflow "
-            "bottlenecks', 'project health summary', 'executive brief', 'weekly report', 'compare "
-            "vendor performance', 'rank by urgency/exposure' — you MUST call query_records_across_projects "
-            "(record-level results, e.g. bp_name='Vendor' or bp_name='Risk') and/or "
-            "query_records_status_summary (counts by BP/status) and present whatever real records/counts "
-            "come back as a table. Some of the exact criteria in these requests (ranked by 'exposure', "
-            "'trend', 'response time', 'compliance score', dollar amounts, due dates) are NOT literal "
-            "fields in this schema — do not use that as a reason to skip the tool call and decline "
-            "outright. Instead: show the real records/counts you found, then add one line noting which "
-            "specific requested criteria aren't tracked as structured fields in the cache. Only decline "
-            "entirely if the tool call itself returns zero records — even then, suggest triggering a "
-            "sync or naming a specific project/BP, never a flat 'not supported'.\n"
-            "   EXAMPLE — user asks: 'Compare contractor and vendor performance using response time, "
-            "quality, delivery, and compliance.' WRONG answer: explaining that no tool computes those "
-            "metrics, without calling anything. RIGHT answer: call "
-            "query_records_across_projects(bp_name='Vendor') (and 'Contractor' if separate), show the "
-            "resulting records as a table (project, record #, title, status, assigned), THEN add: "
-            "'Response time, quality, delivery, and compliance scores aren't tracked as structured "
-            "fields in this cache — this is the underlying Vendor/Contractor record data available.' "
-            "Reasoning that a tool 'can't compute X' is never a substitute for calling it and showing "
-            "what it returns.\n"
-            "9. If a request asks for figures this cache genuinely doesn't have anywhere — cost, budget, "
-            "dollar exposure, milestone/due dates — say plainly that those aren't in the cached summary "
-            "rather than inventing numbers; offer to look up a specific project/BP/record instead if the "
-            "user names one.\n"
-            "10. PROJECT NAME RESOLUTION: When a user mentions a project by name (e.g. 'Datamato', 'OracleNewR'), "
-            "ALWAYS call query_active_projects to find its project number and details automatically. Never ask the user for "
-            "a project number if they provided a project name — look it up immediately. Once you have the project number, "
-            "use it for subsequent queries like query_project_bp_catalog(project_number) or query_project_users(project_number).\n"
-        )
+        return self._run(agent, user_query, chat_history, client, memory)
+
+    def _run(self, agent: Any, user_query: str, chat_history: List[Dict[str, str]], client: Any, memory: Any) -> str:
+        from agent_prompts import build_system_prompt
+        from agent_tools import set_request_context, reset_request_context
+
+        system_prompt = build_system_prompt(memory.context_block())
 
         messages: list = [("system", system_prompt)]
-        history_msgs = list(chat_history or [])
-        # Avoid duplicating the current user_query if the frontend pushed it to chat_history before sending
-        if history_msgs and history_msgs[-1].get("role") == "user" and history_msgs[-1].get("content") == user_query:
-            history_msgs = history_msgs[:-1]
-
-        for msg in history_msgs[-8:]:
+        history = list(chat_history)
+        # The frontend appends the current user turn before sending — drop the dupe.
+        if history and history[-1].get("role") == "user" and history[-1].get("content") == user_query:
+            history = history[:-1]
+        for msg in history[-MAX_HISTORY_TURNS:]:
             role = "user" if msg.get("role") == "user" else "assistant"
             content = msg.get("content", "")
             if content:
                 messages.append((role, content))
         messages.append(("user", user_query))
 
-        # \u2500\u2500 Run Agent \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+        token = set_request_context(client=client, memory=memory)
         try:
-            agent_executor = create_react_agent(llm, tools)
-            response = agent_executor.invoke({"messages": messages})
+            response = agent.invoke({"messages": messages}, config={"recursion_limit": RECURSION_LIMIT})
             result_messages = response.get("messages", [])
-            last_msg = result_messages[-1] if result_messages else None
-            content = str(last_msg.content) if last_msg is not None and getattr(last_msg, "content", None) else ""
-            if not content:
-                # Gemini occasionally ends the ReAct loop with an empty-content AIMessage
-                # right after a successful tool call. Fall back to the tool's own output
-                # instead of showing nothing.
-                for msg in reversed(result_messages):
-                    if type(msg).__name__ == "ToolMessage" and getattr(msg, "content", None):
-                        content = str(msg.content)
-                        break
-            return content or "The assistant didn't return a response. Please try rephrasing your question."
-        except Exception as e:
-            err_str = str(e)
-            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                return (
-                    "⚠️ **Google Gemini Rate Limit Reached (429 Resource Exhausted)**\n\n"
-                    "Your Gemini API Key has temporarily exceeded its requests-per-minute (RPM) or tokens-per-minute (TPM) quota.\n"
-                    "Please wait a few seconds and try again, or check your rate limits at [Google AI Studio](https://aistudio.google.com/)."
+
+            # Persist resolved entities from the tool calls the agent actually made.
+            try:
+                memory.update_from_tool_calls(result_messages)
+                memory.update_history_summary(chat_history, keep_recent=MAX_HISTORY_TURNS)
+                memory.save()
+            except Exception as mem_err:
+                logger.warning(f"Memory update failed: {mem_err}")
+
+            answer, raw_tool_fallback = self._extract_answer(result_messages)
+
+            # If the model returned absolutely nothing but DID run a tool, force a conversational summary
+            if not answer and raw_tool_fallback:
+                logger.warning("Agent returned empty answer after tool call. Forcing conversational summary.")
+                correction = (
+                    "You ran a tool but returned no response. "
+                    "Please provide a conversational answer to the user based ONLY on the tool results you just received. "
+                    "Do NOT dump raw tool output. Follow all formatting and grounding rules."
                 )
-            return (
-                f"Agent error: {err_str}\n\n"
-                "If this is an API key error, check your Gemini API key in the AI Chatbot Config sidebar."
+                retry = list(messages) + result_messages + [("user", correction)]
+                response2 = agent.invoke({"messages": retry}, config={"recursion_limit": RECURSION_LIMIT})
+                rm2 = response2.get("messages", [])
+                answer, _ = self._extract_answer(rm2)
+                if not answer:
+                    answer = f"I found this information, but encountered an error formatting it:\n\n{raw_tool_fallback}"
+
+            if not answer:
+                return "The assistant didn't return a response. Please try rephrasing your question."
+
+            answer = self._enforce_grounding(agent, messages, result_messages, system_prompt, answer)
+            return answer
+        except Exception as e:
+            err = str(e)
+            if "429" in err or "RESOURCE_EXHAUSTED" in err:
+                return ("⚠️ **Google Gemini Rate Limit Reached (429 Resource Exhausted)**\n\n"
+                        "Your Gemini API Key has temporarily exceeded its quota. Please wait a few seconds "
+                        "and try again, or check limits at [Google AI Studio](https://aistudio.google.com/).")
+            logger.error(f"Agent error: {err}")
+            return (f"Agent error: {err}\n\nIf this is an API key error, check your Gemini API key "
+                    "in the AI Chatbot Config sidebar.")
+        finally:
+            reset_request_context(token)
+
+    @staticmethod
+    def _tool_corpus(result_messages: list, system_prompt: str) -> str:
+        """All grounded text available this turn: tool outputs + the resolved-context
+        block in the system prompt (which carries the active project number/name)."""
+        parts = [system_prompt or ""]
+        for msg in result_messages:
+            if type(msg).__name__ == "ToolMessage" and getattr(msg, "content", None):
+                parts.append(str(msg.content))
+        return "\n".join(parts)
+
+    def _enforce_grounding(self, agent: Any, messages: list, result_messages: list,
+                           system_prompt: str, answer: str) -> str:
+        """Backstop for the G-rules: if the answer states a number/record-id that isn't
+        traceable to this turn's tool outputs, re-ground once; if it still can't be
+        verified, flag the specific values rather than letting a fabricated figure stand."""
+        try:
+            corpus = self._tool_corpus(result_messages, system_prompt)
+            bad = verify_grounding(answer, corpus)
+            if not bad:
+                return answer
+            logger.warning(f"Grounding guard: unverifiable values {bad} — re-grounding.")
+
+            correction = (
+                "GROUNDING CHECK FAILED. Your previous draft stated these values that are NOT present "
+                f"in any tool result this turn: {', '.join(bad)}. Rewrite the answer using ONLY values "
+                "returned by the tools. Call a tool to obtain any figure you need; for anything the "
+                "database does not provide, say 'That information is not in the database.' Do not compute, "
+                "round, or invent numbers."
             )
+            retry = list(messages) + result_messages + [("assistant", answer), ("user", correction)]
+            response2 = agent.invoke({"messages": retry}, config={"recursion_limit": RECURSION_LIMIT})
+            rm2 = response2.get("messages", [])
+            answer2, _ = self._extract_answer(rm2)
+            corpus2 = corpus + "\n" + self._tool_corpus(rm2, "")
+            bad2 = verify_grounding(answer2, corpus2)
+            if not bad2:
+                return answer2 or answer
+            # Still unverifiable → surface honestly instead of asserting a wrong figure.
+            logger.warning(f"Grounding guard: still unverifiable after retry: {bad2}")
+            caveat = ("\n\n> ⚠️ **Grounding note:** I could not verify these value(s) against the database "
+                      f"this turn: {', '.join(bad2)}. Please re-ask or request a data sync so I can confirm them.")
+            return (answer2 or answer) + caveat
+        except Exception as e:
+            logger.warning(f"Grounding guard error (returning original answer): {e}")
+            return answer
+
+    @staticmethod
+    def _extract_answer(result_messages: list) -> tuple[str, str]:
+        """Returns (actual_answer, raw_tool_fallback)."""
+        last_msg = result_messages[-1] if result_messages else None
+        content = str(last_msg.content) if last_msg is not None and getattr(last_msg, "content", None) else ""
+        raw_tool = ""
+        if not content:
+            # Find the last tool message if any
+            for msg in reversed(result_messages):
+                if type(msg).__name__ == "ToolMessage" and getattr(msg, "content", None):
+                    raw_tool = str(msg.content)
+                    break
+        return content, raw_tool

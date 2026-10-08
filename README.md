@@ -14,7 +14,9 @@ An enterprise-grade FastAPI portal and Conversational AI RAG Chatbot for Oracle 
 - **👥 User Administration**: Query Unifier system users (`/admin/user/get`).
 - **🤖 Agentic RAG AI Chatbot**:
   - Live agentic tools (`LangGraph` + `LangChain`) querying Unifier APIs on-demand with caching support.
-  - Supports both **Groq** (`llama-3.3-70b-versatile`) for ultra-fast inference and **OpenAI** (`gpt-3.5-turbo` / `gpt-4o`).
+  - Powered by **Google Gemini** (`gemini-2.5-flash-lite` by default; override with `GEMINI_MODEL`).
+  - Structured conversation memory: resolved projects/BPs/records carry across turns, so follow-ups like "show me its contract records" reuse the project you already established.
+  - Curated SQL analytics tools for exact counting / filtering / grouping, plus semantic vector search.
   - Persistent SQLite chat history with multi-conversation management.
   - Modern web SPA frontend interface with conversational AI chat.
 
@@ -32,9 +34,12 @@ This project is fully containerized and optimized for **Dokploy** deployment.
    ```env
    UNIFIER_BEARER_TOKEN=your_bearer_token_here
    UNIFIER_BASE_URL=https://us2.unifier.oraclecloud.com/consulting/test/ws/rest/service/v1
-   GROQ_API_KEY=gsk_your_groq_key_here
-   OPENAI_API_KEY=sk-your_openai_key_here
-   LLM_PROVIDER=groq
+   GEMINI_API_KEY=your_gemini_api_key_here
+   GEMINI_MODEL=gemini-2.5-flash-lite
+   LLM_PROVIDER=gemini
+   # Optional sync tuning
+   SYNC_INTERVAL_MIN=60
+   SYNC_MAX_PROJECTS=250
    ```
 4. Click **Deploy**. Dokploy will automatically build and launch your application on port `8501`.
 
@@ -83,6 +88,6 @@ docker run -p 8501:8501 --env-file .env unifier-dashboard
 - **API Client**: Python `requests`
 - **Database / Cache**: SQLite (`chats.db`) & ChromaDB
 - **LLM Orchestration**: LangChain & LangGraph
-- **LLM Providers**: Groq (`ChatGroq`) & OpenAI (`ChatOpenAI`)
+- **LLM Provider**: Google Gemini (`ChatGoogleGenerativeAI`)
 - **Containerization**: Docker, Docker Compose, Dokploy
 
