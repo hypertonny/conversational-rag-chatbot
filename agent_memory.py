@@ -89,8 +89,9 @@ ensure_schema()
 def _lookup_project_name(project_number: str) -> str:
     """Best-effort project name; prefers the Postgres store, falls back to SQLite cache."""
     try:
-        import pgstore
-        if pgstore.is_configured():
+        import retrieval
+        if retrieval._use_pg():
+            import pgstore
             res = pgstore.find_projects(project_number)
             exact = res.get("exact")
             if exact and exact.get("project_name"):

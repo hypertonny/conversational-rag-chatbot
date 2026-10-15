@@ -34,7 +34,7 @@ services:
       - UNIFIER_BEARER_TOKEN=${UNIFIER_BEARER_TOKEN:-}
       - UNIFIER_BASE_URL=${UNIFIER_BASE_URL:-https://us2.unifier.oraclecloud.com/consulting/test/ws/rest/service/v1}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash-lite}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.5-flash-lite}
       - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
       - SYNC_INTERVAL_MIN=${SYNC_INTERVAL_MIN:-60}
       - SYNC_MAX_PROJECTS=${SYNC_MAX_PROJECTS:-40}

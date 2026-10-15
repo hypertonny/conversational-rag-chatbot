@@ -7,6 +7,7 @@ orchestrator before each agent invocation, which keeps the compiled agent reusab
 across requests while remaining thread-safe.
 """
 import contextvars
+import os
 from dataclasses import dataclass
 from typing import Any, List, Optional
 
@@ -14,6 +15,32 @@ from langchain_core.tools import tool
 
 from record_utils import extract_records, format_record
 import retrieval
+
+
+# Live-first (testing) vs Postgres-first (production). During testing we fetch current
+# Unifier data on demand and cache it, so counts/lookups are exact AND up-to-date even
+# for projects not yet bulk-ingested. Toggle with LIVE_FIRST=false for production.
+def _live_first() -> bool:
+    return os.getenv("LIVE_FIRST", "true").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _ensure_live_scope(project_number: str, bpname: str = "") -> None:
+    """Live cache-on-read: before a structured query on a project, pull the project's current
+    records from Unifier into Postgres so the answer reflects live data. We cache at the WHOLE
+    PROJECT level (enumerate the project's real BPs) rather than a fuzzy bp_name, so any later
+    BP filter (e.g. 'change order' → 'Change Order' + 'Potential Change Order') matches exactly
+    against the freshly-cached rows. A per-scope TTL avoids re-crawling within a session. No-op
+    when LIVE_FIRST is off, no project is given, or no client is available. Never raises."""
+    if not _live_first() or not project_number:
+        return
+    client = _client()
+    if client is None:
+        return
+    try:
+        import pg_sync
+        pg_sync.cache_scope(project_number=project_number, bpname="", client=client)
+    except Exception:
+        pass  # fall back to whatever is already in the store; never break the answer
 
 
 @dataclass
@@ -299,7 +326,18 @@ def query_specific_company_bp_record(bpname: str, record_no: str) -> str:
                         return f"Company BP '{bpname}' | Record '{record_no}' (cached):\n{format_record(raw, max_fields=100)}{dup_note}"
             return f"Company BP '{bpname}' | Record '{record_no}' (cached summary):\n{format_record(r, max_fields=100)}{dup_note}"
 
-        return f"Record '{record_no}' not found in Company BP '{bpname}' (neither live nor cached)."
+        # If not found, check for similar record numbers or BP names
+        sugg_msg = ""
+        try:
+            suggs = retrieval.suggest_matches(query=record_no, limit=3)
+            rec_suggs = suggs.get("records", [])
+            if rec_suggs:
+                items = [f"'{s['record_no']}' in '{s['bp_name']}'" for s in rec_suggs]
+                sugg_msg = f" Did you mean one of these? {', '.join(items)}."
+        except Exception:
+            pass
+
+        return f"Record '{record_no}' not found in Company BP '{bpname}' (neither live nor cached).{sugg_msg}"
     except Exception as e:
         return f"Error fetching specific record '{record_no}' from BP '{bpname}': {e}"
 @tool
@@ -412,7 +450,20 @@ def query_specific_project_bp_record(project_number: str, bpname: str, record_no
                         return f"Project '{project_number}' | BP '{bpname}' | Record '{record_no}' (cached):\n{format_record(raw, max_fields=100)}{dup_note}"
             return f"Project '{project_number}' | BP '{bpname}' | Record '{record_no}' (cached summary):\n{format_record(r, max_fields=100)}{dup_note}"
 
-        return f"Record '{record_no}' not found in BP '{bpname}' for project '{project_number}' (neither live nor cached)."
+        # If not found, check for similar record numbers in this project (or globally)
+        sugg_msg = ""
+        try:
+            suggs = retrieval.suggest_matches(query=record_no, project_number=project_number, limit=3)
+            rec_suggs = suggs.get("records", [])
+            if not rec_suggs:
+                rec_suggs = retrieval.suggest_matches(query=record_no, limit=3).get("records", [])
+            if rec_suggs:
+                items = [f"'{s['record_no']}' ({s['bp_name']}, status: {s.get('status') or 'n/a'})" for s in rec_suggs]
+                sugg_msg = f" Did you mean one of these? {', '.join(items)}."
+        except Exception:
+            pass
+
+        return f"Record '{record_no}' not found in BP '{bpname}' for project '{project_number}' (neither live nor cached).{sugg_msg}"
     except Exception as e:
         return f"Error fetching specific record '{record_no}' from project '{project_number}' BP '{bpname}': {e}"
 @tool
@@ -650,6 +701,15 @@ def resolve_project(query: str) -> str:
             for c in cands[:10]:
                 lines.append(f"  - '{c['project_number']}': {c['project_name']} (Status: {c['status']})")
             return "\n".join(lines)
+
+        # Trigram suggestions fallback when query doesn't match standard prefix/substring search
+        suggs = retrieval.suggest_matches(query, limit=5).get("projects", [])
+        if suggs:
+            lines = [f"No project matches '{query}'. Closest suggestions (did you mean one of these?):"]
+            for p in suggs:
+                lines.append(f"  - '{p['project_number']}': {p['project_name']} (Status: {p['status']})")
+            return "\n".join(lines)
+
         return (f"No project matches '{query}' in the cache. Ask the user to confirm the exact "
                 f"project number or name, or run a sync if the catalog may be stale.")
     except Exception as e:
@@ -662,15 +722,16 @@ def count_matching_records(status: str = "", bp_name: str = "", project_number: 
     """EXACT count of BP records matching the filters. Use for any 'how many' question.
     All args optional; blanks are ignored. Partial match on status/bp_name/assignee/creator/keyword."""
     try:
+        _ensure_live_scope(project_number, bp_name)
         n = retrieval.count_records(status=status, bp_name=bp_name, project_number=project_number,
                                     assigned_to=assigned_to, creator=creator, keyword=keyword)
         applied = {k: v for k, v in dict(status=status, bp_name=bp_name, project_number=project_number,
                                           assigned_to=assigned_to, creator=creator, keyword=keyword).items() if v}
         filt = ", ".join(f"{k}={v}" for k, v in applied.items()) or "no filters"
         # Completeness guard: a 0 for a specific project may mean "that project's records were
-        # never ingested", NOT a confirmed zero. Distinguish the two so we never present an
-        # incomplete-store 0 as fact.
-        if project_number and n == 0:
+        # never ingested", NOT a confirmed zero. In live-first mode we already pulled the scope
+        # live above, so a 0 is a genuine zero and we skip this guard.
+        if project_number and n == 0 and not _live_first():
             proj_total = retrieval.count_records(project_number=project_number)
             if proj_total == 0:
                 res = retrieval.find_projects(project_number)
@@ -708,6 +769,7 @@ def group_records_by(group_by: str, status: str = "", bp_name: str = "", project
     """Counts grouped by a single column. group_by must be one of:
     project_number, bp_name, status, creator, assigned_to. Returns a Markdown table."""
     try:
+        _ensure_live_scope(project_number, bp_name)
         rows = retrieval.group_records(group_by, status=status, bp_name=bp_name,
                                        project_number=project_number, assigned_to=assigned_to, creator=creator)
         if not rows:
@@ -732,6 +794,8 @@ def list_matching_records(limit: int = 25, offset: int = 0, status: str = "", bp
     """Paginated record listing plus the TRUE total, so you can page beyond the first screen.
     Use offset to fetch subsequent pages. All filters optional."""
     try:
+        if offset == 0:
+            _ensure_live_scope(project_number, bp_name)
         res = retrieval.list_records(limit=limit, offset=offset, status=status, bp_name=bp_name,
                                      project_number=project_number, assigned_to=assigned_to, creator=creator, keyword=keyword)
         rows = res["rows"]
@@ -774,6 +838,7 @@ def aggregate_amounts_by_currency(bp_name: str = "", project_number: str = "", s
     label; reports one subtotal per currency (USD/EUR/JPY/...). All filters optional/partial-match.
     Present each currency separately and state the filter; do NOT add different currencies together."""
     try:
+        _ensure_live_scope(project_number, bp_name)
         rows = retrieval.aggregate_amounts(bp_name=bp_name, project_number=project_number, status=status,
                                            creator=creator, assigned_to=assigned_to, keyword=keyword)
         applied = {k: v for k, v in dict(bp_name=bp_name, project_number=project_number, status=status,
@@ -838,6 +903,7 @@ def query_records_status_summary(bp_name: str = "", project_number: str = "") ->
     """Record counts grouped by Business Process and status across projects — for health /
     bottleneck / executive-summary requests. Cost, budget, and dates are NOT tracked here."""
     try:
+        _ensure_live_scope(project_number, bp_name)
         rows = retrieval.query_records_status_summary(bp_name=bp_name, project_number=project_number)
         if not rows:
             return "No cached records match those filters. Try a sync or broaden the filters."
@@ -951,6 +1017,40 @@ def query_oracle_documentation_guides() -> str:
     )
 
 
+@tool
+def suggest_similar_entities(query: str, project_number: str = "") -> str:
+    """Find closest matching project numbers/names, record numbers, or Business Process names
+    when a user makes a typo, misspelling, or when an entity lookup returns nothing.
+    Examples: 'bugd-00001' -> 'BUDG-00001', 'prj20' -> 'PRJ202', 'datmato' -> 'Datamato', 'chng order' -> 'Change Order'.
+    Returns real, database-grounded suggestions with their exact names and similarity scores."""
+    import retrieval
+    q = (query or "").strip()
+    if not q:
+        return "Please provide a query or term to find suggestions for."
+    try:
+        res = retrieval.suggest_matches(q, project_number=project_number, limit=5)
+        lines = []
+        if res.get("projects"):
+            lines.append("### Matching Projects:")
+            for p in res["projects"]:
+                lines.append(f"- Project '{p['project_number']}': {p['project_name']} (Status: {p['status']})")
+        if res.get("records"):
+            lines.append("### Matching Records:")
+            for r in res["records"]:
+                title_part = f" — {r['title']}" if r.get("title") else ""
+                lines.append(f"- Record '{r['record_no']}' in BP '{r['bp_name']}' (Project '{r['project_number']}', Status: {r['status']}){title_part}")
+        if res.get("business_processes"):
+            lines.append("### Matching Business Processes:")
+            for b in res["business_processes"]:
+                lines.append(f"- Business Process: '{b['bp_name']}'")
+
+        if not lines:
+            return f"No close matching projects, records, or business processes found for '{query}'."
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error finding suggestions for '{query}': {e}"
+
+
 # ============================ TOOL REGISTRY ============================
 
 ALL_TOOLS = [
@@ -975,6 +1075,7 @@ ALL_TOOLS = [
     show_more_records,
     get_current_date,
     semantic_search_unifier,
+    suggest_similar_entities,
     sync_project_records,
     trigger_local_data_sync,
     query_full_database_summary,

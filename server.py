@@ -639,7 +639,7 @@ def chat(req: ChatReq):
         token = (req.bearer_token or "").strip() or os.getenv("UNIFIER_BEARER_TOKEN", "")
         base_url = (req.base_url or "").strip() or os.getenv("UNIFIER_BASE_URL", UnifierClient.DEFAULT_BASE_URL)
         gemini_key = (req.gemini_api_key or "").strip() or os.getenv("GEMINI_API_KEY", "")
-        provider = (req.provider or "").strip() or os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+        provider = (req.provider or "").strip() or os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
         engine = get_engine(gemini_key=gemini_key or None)
 
@@ -657,7 +657,12 @@ def chat(req: ChatReq):
             title = req.prompt[:30] + "..." if len(req.prompt) > 30 else req.prompt
             c.execute('INSERT INTO conversations (id, title, updated_at) VALUES (?, ?, ?)', (conv_id, title, _utcnow()))
         else:
-            c.execute('UPDATE conversations SET updated_at = ? WHERE id = ?', (_utcnow(), conv_id))
+            row = c.execute('SELECT 1 FROM conversations WHERE id = ?', (conv_id,)).fetchone()
+            if not row:
+                title = req.prompt[:30] + "..." if len(req.prompt) > 30 else req.prompt
+                c.execute('INSERT INTO conversations (id, title, updated_at) VALUES (?, ?, ?)', (conv_id, title, _utcnow()))
+            else:
+                c.execute('UPDATE conversations SET updated_at = ? WHERE id = ?', (_utcnow(), conv_id))
 
         # Save user message
         c.execute('INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)',
@@ -699,6 +704,13 @@ def chat(req: ChatReq):
         if conn is not None:
             conn.close()
 
+# Entity Suggestions / Autocomplete API for Frontend
+@app.get("/api/suggest")
+def api_suggest(q: str = "", project_number: str = "", limit: int = 5):
+    import retrieval
+    return retrieval.suggest_matches(query=q, project_number=project_number, limit=limit)
+
+
 # Environment Config Defaults for Frontend
 @app.get("/api/config")
 def get_config():
@@ -709,7 +721,7 @@ def get_config():
         "bearer_token_set": bool(os.getenv("UNIFIER_BEARER_TOKEN", "").strip()),
         "gemini_key_set": bool(os.getenv("GEMINI_API_KEY", "").strip()),
         "default_base_url": os.getenv("UNIFIER_BASE_URL", UnifierClient.DEFAULT_BASE_URL),
-        "default_gemini_model": os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite"),
+        "default_gemini_model": os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
         "default_llm_provider": os.getenv("LLM_PROVIDER", "gemini").lower()
     }
 

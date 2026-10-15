@@ -585,7 +585,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     bearer_token: bearerToken.value.trim(),
                     base_url: getBaseUrl(),
                     gemini_api_key: geminiApiKey ? geminiApiKey.value.trim() : "",
-                    provider: llmProvider ? llmProvider.value : "gemini-2.5-flash-lite",
+                    provider: llmProvider ? llmProvider.value : "gemini-3.5-flash-lite",
                     prompt: text,
                     chat_history: chatHistory,
                     conversation_id: currentConversationId

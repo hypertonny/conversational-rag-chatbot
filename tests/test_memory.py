@@ -4,6 +4,7 @@ import pytest
 
 import agent_memory
 import sync_manager
+import retrieval
 from agent_memory import ConversationMemory
 
 
@@ -15,6 +16,7 @@ class FakeMsg:
 
 @pytest.fixture()
 def temp_dbs(tmp_path, monkeypatch):
+    monkeypatch.setattr(retrieval, "_use_pg", lambda: False)
     # Memory persistence DB
     mem_db = str(tmp_path / "chats_test.db")
     monkeypatch.setattr(agent_memory, "DB_PATH", mem_db)

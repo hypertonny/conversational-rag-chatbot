@@ -82,6 +82,59 @@ def sync_project(project_number: str, client: Any, embed: bool = True) -> Dict[s
     return result
 
 
+def sync_project_bp(project_number: str, bpname: str, client: Any) -> Dict[str, Any]:
+    """Pull ONE project+BP's records live and CDC-upsert into Postgres (fast, single scope)."""
+    pgstore.ensure_schema()
+    ok, rdata, code, _ = client.get_project_bp_records(project_number, bpname)
+    if not ok:
+        return {"ok": False, "project_number": project_number, "bpname": bpname, "error": f"HTTP {code}: {rdata}", "records": 0}
+    total = changed = 0
+    for r in extract_records(rdata):
+        if not isinstance(r, dict):
+            continue
+        rec = _rec_fields(r, project_number, bpname, "project")
+        if not rec["record_no"]:
+            continue
+        if pgstore.upsert_record(rec):
+            changed += 1
+        total += 1
+    return {"ok": True, "project_number": project_number, "bpname": bpname, "records": total, "changed": changed}
+
+
+def cache_scope(project_number: str, bpname: str = "", client: Any = None, ttl_sec: int = 600) -> Dict[str, Any]:
+    """Lazy cache-on-read: ensure a (project[, BP]) scope's live records are in Postgres.
+
+    Live-first for testing: fetches current data from Unifier and upserts it, so counts /
+    lookups are exact AND up-to-date, while progressively populating the store. Skips the
+    live call when the same scope was refreshed within ``ttl_sec`` (so repeated queries in a
+    session stay instant). Returns {ok, cached(bool), ...}."""
+    if client is None or not project_number:
+        return {"ok": False, "cached": False, "error": "no client/project"}
+    import time as _t
+    from datetime import datetime, timezone
+    key = f"scope:{project_number}:{bpname or '*'}"
+    try:
+        st = pgstore.get_ingest_state(key)
+        if st and st.get("last_run"):
+            age = (datetime.now(timezone.utc) - st["last_run"]).total_seconds()
+            if age < ttl_sec:
+                return {"ok": True, "cached": True, "fresh": True, "age_sec": int(age)}
+    except Exception:
+        pass
+
+    if bpname:
+        res = sync_project_bp(project_number, bpname, client)
+    else:
+        res = sync_project(project_number, client, embed=False)  # whole-project crawl (once)
+    if res.get("ok"):
+        try:
+            pgstore.set_ingest_state(key, meta={"records": res.get("records", 0), "changed": res.get("changed", 0)})
+        except Exception:
+            pass
+    res["cached"] = False
+    return res
+
+
 def sync_all(client: Any, max_projects: Optional[int] = None, embed: bool = True,
              progress: Optional[Callable[[int, int, str], None]] = None) -> Dict[str, Any]:
     """Pull records for every active project into Postgres, then embed once at the end.

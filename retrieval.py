@@ -284,6 +284,42 @@ def aggregate_amounts(**filters: str) -> List[Dict[str, Any]]:
     return []
 
 
+def suggest_matches(query: str, project_number: str = "", limit: int = 5, threshold: float = 0.25) -> Dict[str, List[Dict[str, Any]]]:
+    """Find closest matching projects, records, and business processes for misspelled/typo queries."""
+    if _use_pg():
+        return pgstore.suggest_matches(query=query, project_number=project_number, limit=limit, threshold=threshold)
+    q = (query or "").strip().lower()
+    if not q:
+        return {"projects": [], "records": [], "business_processes": []}
+    conn = get_db_connection()
+    try:
+        p_rows = conn.execute(
+            "SELECT project_number, project_name, status FROM cached_projects "
+            "WHERE LOWER(project_number) LIKE ? OR LOWER(project_name) LIKE ? LIMIT ?",
+            (f"%{q}%", f"%{q}%", limit)
+        ).fetchall()
+        projects = [{"project_number": r["project_number"], "project_name": r["project_name"], "status": r["status"], "similarity": 0.5} for r in p_rows]
+
+        b_rows = conn.execute(
+            "SELECT bp_name FROM cached_company_bps WHERE LOWER(bp_name) LIKE ? LIMIT ?",
+            (f"%{q}%", limit)
+        ).fetchall()
+        bps = [{"bp_name": r["bp_name"], "similarity": 0.5} for r in b_rows]
+
+        r_sql = "SELECT DISTINCT record_no, bp_name, project_number, status, title FROM cached_bp_records WHERE LOWER(record_no) LIKE ? OR LOWER(title) LIKE ?"
+        r_params = [f"%{q}%", f"%{q}%"]
+        if project_number:
+            r_sql += " AND project_number = ?"
+            r_params.append(project_number)
+        r_sql += " LIMIT ?"
+        r_params.append(limit)
+        recs = [{"record_no": r["record_no"], "bp_name": r["bp_name"], "project_number": r["project_number"], "status": r["status"], "title": r["title"], "similarity": 0.5} for r in conn.execute(r_sql, r_params).fetchall()]
+
+        return {"projects": projects, "records": recs, "business_processes": bps}
+    finally:
+        conn.close()
+
+
 __all__ = [
     "count_records",
     "group_records",
@@ -292,6 +328,8 @@ __all__ = [
     "semantic_search",
     "find_projects",
     "is_company_bp",
+    "aggregate_amounts",
+    "suggest_matches",
     "query_records_cross_project",
     "query_records_status_summary",
 ]

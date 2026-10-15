@@ -9,6 +9,7 @@ import pytest
 
 import agent_memory
 import sync_manager
+import retrieval
 from agent_memory import ConversationMemory
 from agent_prompts import build_system_prompt
 
@@ -20,6 +21,7 @@ class FakeMsg:
 
 @pytest.fixture()
 def temp_dbs(tmp_path, monkeypatch):
+    monkeypatch.setattr(retrieval, "_use_pg", lambda: False)
     monkeypatch.setattr(agent_memory, "DB_PATH", str(tmp_path / "chats.db"))
     agent_memory.ensure_schema()
     monkeypatch.setattr(sync_manager, "DB_CACHE_PATH", str(tmp_path / "cache.db"))

@@ -160,7 +160,7 @@ _AGENT_CACHE: Dict[tuple, Any] = {}
 
 
 def _resolve_model_name(provider: str) -> str:
-    env_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+    env_model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
     if provider and provider.startswith("gemini-"):
         return provider
     return env_model
@@ -186,6 +186,30 @@ def _get_compiled_agent(api_key: str, model_name: str):
     _AGENT_CACHE[cache_key] = agent
     logger.info(f"Compiled ReAct agent (model={model_name}); cached for reuse.")
     return agent
+
+
+def _normalize_content(content: Any) -> str:
+    """Extract clean string from message content, which may be a string, list of dicts, or other structure."""
+    if not content:
+        return ""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        text_parts = []
+        for part in content:
+            if isinstance(part, str):
+                text_parts.append(part)
+            elif isinstance(part, dict):
+                # Standard block: {'type': 'text', 'text': '...'}
+                if part.get("type") == "text" and "text" in part:
+                    text_parts.append(str(part["text"]))
+                elif "text" in part:
+                    text_parts.append(str(part["text"]))
+        if text_parts:
+            return "".join(text_parts).strip()
+    return str(content).strip()
+
+
 class ChatbotEngine:
     def __init__(self, gemini_api_key: Optional[str] = None):
         self.gemini_api_key = gemini_api_key or os.getenv("GEMINI_API_KEY", "")
@@ -289,13 +313,19 @@ class ChatbotEngine:
             reset_request_context(token)
 
     @staticmethod
-    def _tool_corpus(result_messages: list, system_prompt: str) -> str:
-        """All grounded text available this turn: tool outputs + the resolved-context
+    def _tool_corpus(result_messages: list, system_prompt: str, messages: list = None) -> str:
+        """All grounded text available this turn: tool outputs + user prompt tokens + the resolved-context
         block in the system prompt (which carries the active project number/name)."""
         parts = [system_prompt or ""]
+        if messages:
+            for item in messages:
+                if isinstance(item, (list, tuple)) and len(item) == 2:
+                    role, content = item
+                    if role == "user" and content:
+                        parts.append(str(content))
         for msg in result_messages:
             if type(msg).__name__ == "ToolMessage" and getattr(msg, "content", None):
-                parts.append(str(msg.content))
+                parts.append(_normalize_content(msg.content))
         return "\n".join(parts)
 
     def _enforce_grounding(self, agent: Any, messages: list, result_messages: list,
@@ -304,7 +334,7 @@ class ChatbotEngine:
         traceable to this turn's tool outputs, re-ground once; if it still can't be
         verified, flag the specific values rather than letting a fabricated figure stand."""
         try:
-            corpus = self._tool_corpus(result_messages, system_prompt)
+            corpus = self._tool_corpus(result_messages, system_prompt, messages)
             bad = verify_grounding(answer, corpus)
             if not bad:
                 return answer
@@ -321,7 +351,7 @@ class ChatbotEngine:
             response2 = agent.invoke({"messages": retry}, config={"recursion_limit": RECURSION_LIMIT})
             rm2 = response2.get("messages", [])
             answer2, _ = self._extract_answer(rm2)
-            corpus2 = corpus + "\n" + self._tool_corpus(rm2, "")
+            corpus2 = corpus + "\n" + self._tool_corpus(rm2, "", messages)
             bad2 = verify_grounding(answer2, corpus2)
             if not bad2:
                 return answer2 or answer
@@ -338,12 +368,13 @@ class ChatbotEngine:
     def _extract_answer(result_messages: list) -> tuple[str, str]:
         """Returns (actual_answer, raw_tool_fallback)."""
         last_msg = result_messages[-1] if result_messages else None
-        content = str(last_msg.content) if last_msg is not None and getattr(last_msg, "content", None) else ""
+        raw_content = getattr(last_msg, "content", None) if last_msg is not None else None
+        content = _normalize_content(raw_content)
         raw_tool = ""
         if not content:
             # Find the last tool message if any
             for msg in reversed(result_messages):
                 if type(msg).__name__ == "ToolMessage" and getattr(msg, "content", None):
-                    raw_tool = str(msg.content)
+                    raw_tool = _normalize_content(msg.content)
                     break
         return content, raw_tool

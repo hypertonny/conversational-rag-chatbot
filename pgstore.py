@@ -58,6 +58,7 @@ def get_pool():
 
 _SCHEMA = """
 CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 CREATE TABLE IF NOT EXISTS projects (
     project_number TEXT PRIMARY KEY,
@@ -67,6 +68,8 @@ CREATE TABLE IF NOT EXISTS projects (
     raw            JSONB NOT NULL DEFAULT '{}',
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS idx_projects_name_trgm ON projects USING gin (project_name gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_projects_num_trgm  ON projects USING gin (project_number gin_trgm_ops);
 
 CREATE TABLE IF NOT EXISTS company_bps (
     bp_name       TEXT PRIMARY KEY,
@@ -104,6 +107,9 @@ CREATE TABLE IF NOT EXISTS records (
 CREATE INDEX IF NOT EXISTS idx_records_proj_bp ON records (project_number, bp_name);
 CREATE INDEX IF NOT EXISTS idx_records_bp      ON records (bp_name);
 CREATE INDEX IF NOT EXISTS idx_records_status  ON records (status);
+CREATE INDEX IF NOT EXISTS idx_records_rec_no_trgm ON records USING gin (record_no gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_records_bp_trgm     ON records USING gin (bp_name gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_records_title_trgm  ON records USING gin (title gin_trgm_ops);
 
 CREATE TABLE IF NOT EXISTS record_chunks (
     chunk_id       TEXT PRIMARY KEY,
@@ -219,19 +225,83 @@ def distinct_values(field: str, **filters: str) -> List[str]:
 def find_projects(query: str, limit: int = 10) -> Dict[str, Any]:
     q = (query or "").strip()
     with get_pool().connection() as conn:
+        # Case-insensitive EXACT match on the project number (so 'prj202' resolves 'PRJ202').
+        # NOT zero-pad normalized — '001' and '0001' stay distinct; only letter case is ignored.
         exact = conn.execute(
-            "SELECT project_number, project_name, status, project_type FROM projects WHERE project_number = %s", (q,)
+            "SELECT project_number, project_name, status, project_type FROM projects WHERE LOWER(project_number) = LOWER(%s)", (q,)
         ).fetchone()
         cands = conn.execute(
             "SELECT project_number, project_name, status, project_type FROM projects "
-            "WHERE project_number = %s OR project_name ILIKE %s "
-            "ORDER BY (project_number = %s) DESC, project_number LIMIT %s",
+            "WHERE LOWER(project_number) = LOWER(%s) OR project_name ILIKE %s "
+            "ORDER BY (LOWER(project_number) = LOWER(%s)) DESC, project_number LIMIT %s",
             (q, f"%{q}%", q, int(limit))
         ).fetchall()
         cols = ["project_number", "project_name", "status", "project_type"]
         return {
             "exact": dict(zip(cols, exact)) if exact else None,
             "candidates": [dict(zip(cols, r)) for r in cands],
+        }
+
+
+def suggest_matches(query: str, project_number: str = "", limit: int = 5, threshold: float = 0.25) -> Dict[str, List[Dict[str, Any]]]:
+    """Find closest matching projects, records, and business processes using pg_trgm similarity."""
+    q = (query or "").strip()
+    if not q:
+        return {"projects": [], "records": [], "business_processes": []}
+
+    with get_pool().connection() as conn:
+        # 1. Projects (number or name)
+        prjs = conn.execute("""
+            SELECT project_number, project_name, status,
+                   GREATEST(similarity(project_number, %s), similarity(project_name, %s)) as sm
+            FROM projects
+            WHERE similarity(project_number, %s) >= %s OR similarity(project_name, %s) >= %s
+            ORDER BY sm DESC, project_number LIMIT %s
+        """, (q, q, q, threshold, q, threshold, int(limit))).fetchall()
+        projects_out = [
+            {"project_number": r[0], "project_name": r[1], "status": r[2], "similarity": round(float(r[3]), 3)}
+            for r in prjs
+        ]
+
+        # 2. Business Processes
+        bps = conn.execute("""
+            SELECT bp_name, similarity(bp_name, %s) as sm
+            FROM (
+                SELECT DISTINCT bp_name FROM records
+                UNION
+                SELECT bp_name FROM company_bps
+            ) all_bps
+            WHERE similarity(bp_name, %s) >= %s
+            ORDER BY sm DESC LIMIT %s
+        """, (q, q, threshold, int(limit))).fetchall()
+        bps_out = [
+            {"bp_name": r[0], "similarity": round(float(r[1]), 3)}
+            for r in bps
+        ]
+
+        # 3. Records (matching record_no or title, optionally scoped to project_number)
+        where_rec = "WHERE (similarity(record_no, %s) >= %s OR similarity(COALESCE(title, ''), %s) >= %s)"
+        params_rec = [q, threshold, q, threshold]
+        if project_number:
+            where_rec += " AND project_number = %s"
+            params_rec.append(project_number)
+
+        recs = conn.execute(f"""
+            SELECT DISTINCT record_no, bp_name, project_number, status, title,
+                   GREATEST(similarity(record_no, %s), similarity(COALESCE(title, ''), %s)) as sm
+            FROM records
+            {where_rec}
+            ORDER BY sm DESC, record_no LIMIT %s
+        """, [q, q, *params_rec, int(limit)]).fetchall()
+        recs_out = [
+            {"record_no": r[0], "bp_name": r[1], "project_number": r[2], "status": r[3], "title": r[4], "similarity": round(float(r[5]), 3)}
+            for r in recs
+        ]
+
+        return {
+            "projects": projects_out,
+            "records": recs_out,
+            "business_processes": bps_out,
         }
 
 
