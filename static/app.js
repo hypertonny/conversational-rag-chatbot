@@ -940,8 +940,13 @@ document.addEventListener("DOMContentLoaded", () => {
     // or tool-sourced response can't execute in the viewer's browser.
     function renderMarkdownSafe(content) {
         if (typeof marked === "undefined") return escapeHtml(content);
-        const html = marked.parse(content);
-        return typeof DOMPurify !== "undefined" ? DOMPurify.sanitize(html) : escapeHtml(content);
+        let html = marked.parse(content);
+        if (typeof DOMPurify !== "undefined") {
+            html = DOMPurify.sanitize(html);
+        }
+        // Wrap tables in responsive scroll wrapper so wide tables never overflow or break layout
+        html = html.replace(/<table(\s*[^>]*)>/gi, '<div class="chat-table-wrapper"><table$1>').replace(/<\/table>/gi, '</table></div>');
+        return html;
     }
 
     function escapeHtml(str) {

@@ -556,44 +556,54 @@ code, textarea.code-font {
 }
 
 /* ── MARKDOWN TABLE STYLES (for chatbot responses) ─────────────────── */
+.chat-table-wrapper {
+    width: 100%;
+    overflow-x: auto;
+    margin: 8px 0;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+}
+
 .message-content table {
     width: 100%;
+    min-width: 100%;
     border-collapse: collapse;
-    margin: 12px 0;
-    font-size: 0.8rem;
-    background: #0e1117;
+    margin: 6px 0;
+    font-size: 0.78rem;
+    background: #fff;
+    border: 1px solid #000;
     border-radius: var(--radius-md);
     overflow: hidden;
-    display: block;
-    overflow-x: auto;
-    box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+    display: table;
+    table-layout: auto;
+    box-shadow: none;
 }
 
 .message-content table thead tr {
-    background: linear-gradient(90deg, #1a2d4d 0%, #1a3a5c 100%);
-    border-bottom: 2px solid var(--accent-blue);
+    background: #f4f4f5;
+    border-bottom: 2px solid var(--accent);
 }
 
 .message-content table th {
-    padding: 10px 14px;
+    padding: 7px 12px;
     text-align: left;
-    color: var(--accent-blue);
+    color: #0a0a0a;
     font-weight: 700;
-    font-size: 0.8rem;
+    font-size: 0.72rem;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     white-space: nowrap;
 }
 
 .message-content table td {
-    padding: 8px 14px;
-    border-bottom: 1px solid #1e2d45;
-    color: var(--text-main);
-    vertical-align: top;
+    padding: 6px 12px;
+    border-bottom: 1px solid #e4e4e7;
+    color: #0a0a0a;
+    vertical-align: middle;
 }
 
 .message-content table tbody tr:hover {
-    background: #1a2d4d55;
+    background: #f4f4f5;
     transition: background 0.15s ease;
 }
 
@@ -602,7 +612,7 @@ code, textarea.code-font {
 }
 
 .message-content table tbody tr:nth-child(even) {
-    background: #12192600;
+    background: #fafafa;
 }
 
 /* code blocks inside chat */
@@ -889,6 +899,10 @@ code, textarea.code-font {
     max-width: min(78ch, 82%);
     overflow-x: auto;
 }
+.chat-messages .message-content:has(table),
+.chat-messages .message-content:has(.chat-table-wrapper) {
+    max-width: min(100ch, 92%);
+}
 .chat-messages .message.assistant .message-content {
     background: var(--assistant-bubble);
     border: 1px solid var(--assistant-border);
@@ -1172,10 +1186,10 @@ code, textarea.code-font {
 .history-item.active { background: #ececec; box-shadow: inset 0 0 0 1px #000; }
 
 /* Markdown tables inside chat answers */
-.message-content table { background: #fff; border: 1px solid #000; box-shadow: none; }
-.message-content table thead tr { background: #f4f4f5; border-bottom: 2px solid #000; }
+.message-content table { background: #fff; border: 1px solid #000; box-shadow: none; display: table; width: 100%; table-layout: auto; }
+.message-content table thead tr { background: #f4f4f5; border-bottom: 2px solid var(--accent); }
 .message-content table th { color: #0a0a0a; }
-.message-content table td { border-bottom: 1px solid #000; color: #0a0a0a; }
+.message-content table td { border-bottom: 1px solid #e4e4e7; color: #0a0a0a; }
 .message-content table tbody tr:hover { background: #f4f4f5; }
 .message-content code { background: #f4f4f5; color: #0a0a0a; border: 1px solid #000; }
 .message-content pre { background: #f4f4f5; border: 1px solid #000; }
@@ -1254,9 +1268,9 @@ code, textarea.code-font {
 .msg-avatar { width: 26px; height: 26px; font-size: 11px; margin-top: 1px; }
 
 /* Denser markdown tables inside answers (the biggest space hog) */
-.message-content table { font-size: 0.76rem; margin: 7px 0; }
-.message-content table th { padding: 5px 10px; font-size: 0.72rem; }
-.message-content table td { padding: 4px 10px; }
+.message-content table { font-size: 0.76rem; margin: 4px 0; width: 100%; display: table; table-layout: auto; }
+.message-content table th { padding: 6px 12px; font-size: 0.72rem; }
+.message-content table td { padding: 5px 12px; }
 .message-content p { margin: 4px 0; }
 .message-content ul, .message-content ol { margin: 4px 0; padding-left: 1.25em; }
 .message-content li { margin: 1px 0; }
