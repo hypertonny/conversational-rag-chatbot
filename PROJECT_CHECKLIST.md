@@ -36,6 +36,7 @@
 | C15 | **Model updated to `gemini-3.5-flash-lite`** | Upgraded default model configuration across `.env`, `docker-compose.yml`, `server.py`, `chatbot_engine.py`, and frontend UI (`index.html`/`app.js`). Recreated container and verified via `/api/config`. |
 | C16 | **Clean JSON block content normalization** | Fixed raw python list-of-dicts `[{'type':'text', 'text':'...', 'extras':...}]` leaking to frontend by adding `_normalize_content` in `chatbot_engine.py`. Extracts clean markdown text across both legacy string and new block format responses. 45/45 tests pass. Deployed via `docker cp`. |
 | C17 | **Foreign key fix for custom/restored conversation IDs** | In `server.py`, added upsert check for `conversations` before inserting user/assistant messages, preventing SQLite `FOREIGN KEY constraint failed` errors when client sends custom conversation IDs. Deployed via `docker cp`. |
+| C18 | **Dynamic table spacing & responsive wrapper** | Replaced rigid `display: block` on table with real `display: table` and dynamic column auto-distribution. Wrapped all markdown tables in `.chat-table-wrapper` with horizontal touch scroll so wide tables never overflow or break. Eliminated the dead white void on the right of 2- and 3-column tables. Verified in browser and mobile view. Committed and pushed. |
 
 ---
 
